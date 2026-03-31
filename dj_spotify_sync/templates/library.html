@@ -1,0 +1,51 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Local library</h1>
+<form method="get" class="row g-2 mb-3">
+  <div class="col-md-3"><input class="form-control" name="search" value="{{ filters.search }}" placeholder="Text search"></div>
+  <div class="col-md-2">
+    <select class="form-select" name="match">
+      <option value="all" {% if filters.match == 'all' %}selected{% endif %}>All match states</option>
+      <option value="matched" {% if filters.match == 'matched' %}selected{% endif %}>Matched</option>
+      <option value="unresolved" {% if filters.match == 'unresolved' %}selected{% endif %}>Unresolved</option>
+    </select>
+  </div>
+  <div class="col-md-2">
+    <select class="form-select" name="sync">
+      <option value="all" {% if filters.sync == 'all' %}selected{% endif %}>All sync states</option>
+      <option value="synced" {% if filters.sync == 'synced' %}selected{% endif %}>Synced</option>
+      <option value="unsynced" {% if filters.sync == 'unsynced' %}selected{% endif %}>Unsynced</option>
+    </select>
+  </div>
+  <div class="col-md-3">
+    <select class="form-select" name="playlist">
+      <option value="">All playlists</option>
+      {% for pl in playlists %}
+        <option value="{{ pl }}" {% if filters.playlist == pl %}selected{% endif %}>{{ pl }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-2"><button class="btn btn-outline-primary w-100" type="submit">Apply filters</button></div>
+</form>
+
+<div class="table-responsive">
+<table class="table table-striped table-sm">
+  <thead><tr><th>Title</th><th>Artist</th><th>Genre</th><th>Path</th><th>Target playlist</th><th>Match</th><th>Synced</th></tr></thead>
+  <tbody>
+  {% for row in tracks %}
+    <tr>
+      <td>{{ row.title or row.filename }}</td>
+      <td>{{ row.artist or '-' }}</td>
+      <td>{{ row.genre or '-' }}</td>
+      <td class="small">{{ row.file_path }}</td>
+      <td>{{ row.route_playlist_name or 'Unsorted' }}</td>
+      <td><span class="badge bg-{% if row.match_status == 'matched' %}success{% elif row.match_status == 'unresolved' %}warning{% else %}secondary{% endif %}">{{ row.match_status or 'not-matched' }}</span></td>
+      <td><span class="badge bg-{% if row.is_synced %}success{% else %}secondary{% endif %}">{% if row.is_synced %}yes{% else %}no{% endif %}</span></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="text-muted">No tracks found.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

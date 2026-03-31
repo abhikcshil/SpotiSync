@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Settings (read-only)</h1>
+<table class="table table-bordered w-auto">
+  <tbody>
+    <tr><th>DB path</th><td>{{ config.db_path }}</td></tr>
+    <tr><th>Match threshold</th><td>{{ config.match_threshold }}</td></tr>
+    <tr><th>Unsorted playlist name</th><td>{{ config.unsorted_playlist_name }}</td></tr>
+    <tr><th>Genre map path</th><td>{{ config.genre_map_path }}</td></tr>
+    <tr><th>Spotify redirect URI</th><td>{{ config.spotify_redirect_uri }}</td></tr>
+    <tr><th>Market</th><td>{{ config.market }}</td></tr>
+  </tbody>
+</table>
+{% endblock %}
