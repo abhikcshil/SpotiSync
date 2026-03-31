@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import argparse
 
-from flask import Flask, flash, redirect, render_template, request, url_for
+from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
 
 from .config import AppConfig
 from .db import Database
+from .jobs import job_manager
 from .services import run_check_query, run_scan, run_sync
 
 
@@ -35,36 +36,70 @@ def dashboard():
 
 @app.route("/scan", methods=["GET", "POST"])
 def scan_page():
-    result = None
     if request.method == "POST":
         raw_paths = request.form.get("folders", "")
         folders = [line.strip() for line in raw_paths.splitlines() if line.strip()]
 
         if not folders:
             flash("Please provide at least one folder path.", "danger")
-        else:
-            try:
-                result = run_scan(folders)
-                flash("Scan completed.", "success")
-            except Exception as exc:
-                flash(f"Scan failed: {exc}", "danger")
+            return render_template("scan.html", folders=raw_paths)
 
-    return render_template("scan.html", result=result)
+        job = job_manager.create_job("scan")
+
+        def _run_scan_job() -> dict:
+            return run_scan(
+                folders,
+                progress_callback=lambda current, total, message, extra=None: job_manager.update_progress(
+                    job.job_id, current=current, total=total, message=message, extra=extra
+                ),
+            )
+
+        job_manager.start_job(job, _run_scan_job)
+        return redirect(url_for("job_page", job_id=job.job_id))
+
+    return render_template("scan.html", folders="")
 
 
 @app.route("/sync", methods=["GET", "POST"])
 def sync_page():
-    result = None
     if request.method == "POST":
         raw_limit = request.form.get("limit", "").strip()
-        limit = int(raw_limit) if raw_limit else None
         try:
-            result = run_sync(limit=limit)
-            flash("Sync completed.", "success")
-        except Exception as exc:
-            flash(f"Sync failed: {exc}", "danger")
+            limit = int(raw_limit) if raw_limit else None
+        except ValueError:
+            flash("Limit must be a valid integer.", "danger")
+            return render_template("sync.html", limit=raw_limit)
 
-    return render_template("sync.html", result=result)
+        job = job_manager.create_job("sync")
+
+        def _run_sync_job() -> dict:
+            return run_sync(
+                limit=limit,
+                progress_callback=lambda current, total, message, extra=None: job_manager.update_progress(
+                    job.job_id, current=current, total=total, message=message, extra=extra
+                ),
+            )
+
+        job_manager.start_job(job, _run_sync_job)
+        return redirect(url_for("job_page", job_id=job.job_id))
+
+    return render_template("sync.html", limit="")
+
+
+@app.route("/jobs/<job_id>")
+def job_page(job_id: str):
+    job = job_manager.to_dict(job_id)
+    if not job:
+        abort(404, description="Job not found")
+    return render_template("job.html", job=job)
+
+
+@app.route("/jobs/<job_id>/status")
+def job_status(job_id: str):
+    job = job_manager.to_dict(job_id)
+    if not job:
+        return jsonify({"error": "Job not found", "job_id": job_id}), 404
+    return jsonify(job)
 
 
 @app.route("/check", methods=["GET", "POST"])

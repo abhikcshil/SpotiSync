@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -44,19 +43,32 @@ class MusicScanner:
     def __init__(self, router: GenreRouter) -> None:
         self.router = router
 
-    def scan_paths(self, folders: Iterable[str]) -> List[Dict]:
-        tracks: List[Dict] = []
+    def discover_supported_files(self, folders: Iterable[str]) -> tuple[List[Path], List[str]]:
+        files: List[Path] = []
+        warnings: List[str] = []
         for folder in folders:
             root = Path(folder).expanduser().resolve()
-            if not root.exists():
-                print(f"[WARN] Folder not found: {root}")
+            if not root.exists() or not root.is_dir():
+                warnings.append(f"Folder not found: {root}")
                 continue
             for file_path in root.rglob("*"):
                 if file_path.is_file() and file_path.suffix.lower() in SUPPORTED_EXTENSIONS:
-                    track = self.extract_track_data(file_path)
-                    if track:
-                        tracks.append(track)
+                    files.append(file_path)
+        return files, warnings
+
+    def scan_files(self, files: Iterable[Path]) -> List[Dict]:
+        tracks: List[Dict] = []
+        for file_path in files:
+            track = self.extract_track_data(file_path)
+            if track:
+                tracks.append(track)
         return tracks
+
+    def scan_paths(self, folders: Iterable[str]) -> List[Dict]:
+        files, warnings = self.discover_supported_files(folders)
+        for warning in warnings:
+            print(f"[WARN] {warning}")
+        return self.scan_files(files)
 
     def extract_track_data(self, file_path: Path) -> Optional[Dict]:
         inferred = False
