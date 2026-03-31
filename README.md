@@ -87,6 +87,18 @@ python -m dj_spotify_sync.app sync --limit 200
 python -m dj_spotify_sync.app check "bad bunny titi"
 ```
 
+### 4) Run local web GUI
+```bash
+python -m dj_spotify_sync.web
+```
+Or via CLI entrypoint:
+```bash
+python -m dj_spotify_sync.app gui --host 127.0.0.1 --port 5000
+```
+Then open `http://127.0.0.1:5000`.
+
+GUI pages include dashboard, scan, sync, check, library, unresolved, playlists/routing, and read-only settings.
+
 ## Genre routing config
 
 Edit `dj_spotify_sync/config/genre_map.json`:

@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Scan local folders</h1>
+<form method="post" class="mb-4">
+  <div class="mb-3">
+    <label class="form-label">Folders (one per line)</label>
+    <textarea class="form-control" name="folders" rows="5" placeholder="/Users/you/Music\n/mnt/dj_pool"></textarea>
+  </div>
+  <button class="btn btn-primary" type="submit">Run scan</button>
+</form>
+
+{% if result %}
+<div class="card">
+  <div class="card-body">
+    <h2 class="h5">Scan summary</h2>
+    <ul>
+      <li>Processed: {{ result.processed }}</li>
+      <li>Saved: {{ result.saved }}</li>
+    </ul>
+    {% if result.warnings %}
+      <h3 class="h6">Warnings</h3>
+      <ul>
+        {% for msg in result.warnings %}<li>{{ msg }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

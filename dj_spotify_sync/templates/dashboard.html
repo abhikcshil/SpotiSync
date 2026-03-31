@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1 class="mb-3">Dashboard</h1>
+<div class="row g-3 mb-4">
+  <div class="col-md-2"><div class="card stat-card"><div class="card-body"><div>Total tracks</div><h3>{{ stats.total_tracks }}</h3></div></div></div>
+  <div class="col-md-2"><div class="card stat-card"><div class="card-body"><div>Matched</div><h3>{{ stats.matched_tracks }}</h3></div></div></div>
+  <div class="col-md-2"><div class="card stat-card"><div class="card-body"><div>Unresolved</div><h3>{{ stats.unresolved_tracks }}</h3></div></div></div>
+  <div class="col-md-2"><div class="card stat-card"><div class="card-body"><div>Synced</div><h3>{{ stats.synced_tracks }}</h3></div></div></div>
+  <div class="col-md-2"><div class="card stat-card"><div class="card-body"><div>Playlists</div><h3>{{ stats.playlist_count }}</h3></div></div></div>
+</div>
+
+<div class="mb-4 d-flex gap-2 flex-wrap">
+  <a class="btn btn-primary" href="{{ url_for('scan_page') }}">Start scan</a>
+  <a class="btn btn-success" href="{{ url_for('sync_page') }}">Start sync</a>
+  <a class="btn btn-info" href="{{ url_for('check_page') }}">Search/check song</a>
+  <a class="btn btn-warning" href="{{ url_for('unresolved_page') }}">View unresolved</a>
+  <a class="btn btn-secondary" href="{{ url_for('playlists_page') }}">View playlists/routing</a>
+</div>
+
+<h2 class="h4">Recent sync activity</h2>
+<div class="table-responsive">
+<table class="table table-sm table-striped">
+  <thead><tr><th>Time</th><th>Status</th><th>Track</th><th>Playlist</th><th>Message</th></tr></thead>
+  <tbody>
+    {% for row in recent_activity %}
+      <tr>
+        <td>{{ row.synced_at }}</td>
+        <td><span class="badge bg-{% if row.status == 'added' %}success{% elif row.status == 'skipped' %}secondary{% else %}danger{% endif %}">{{ row.status }}</span></td>
+        <td>{{ row.artist or 'Unknown' }} - {{ row.title or row.filename }}</td>
+        <td>{{ row.playlist_name or '-' }}</td>
+        <td>{{ row.message or '-' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="text-muted">No sync history yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

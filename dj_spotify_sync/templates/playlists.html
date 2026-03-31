@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Playlists and routing</h1>
+<div class="table-responsive">
+<table class="table table-striped table-sm">
+  <thead><tr><th>Playlist</th><th>Spotify playlist ID</th><th>Routed local tracks</th><th>Matched in route</th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td>{{ row.playlist_name }}</td>
+      <td class="small">{{ row.spotify_playlist_id or '-' }}</td>
+      <td>{{ row.local_track_count }}</td>
+      <td>{{ row.matched_track_count }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4" class="text-muted">No playlist routing data yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

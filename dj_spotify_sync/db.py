@@ -208,5 +208,121 @@ class Database:
             (like, like, like, limit),
         ).fetchall()
 
+    def get_dashboard_stats(self) -> Dict[str, int]:
+        row = self.conn.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM local_tracks) AS total_tracks,
+                (SELECT COUNT(*) FROM spotify_matches WHERE status = 'matched') AS matched_tracks,
+                (SELECT COUNT(*) FROM spotify_matches WHERE status = 'unresolved') AS unresolved_tracks,
+                (SELECT COUNT(DISTINCT local_track_id) FROM sync_history WHERE status = 'added') AS synced_tracks,
+                (SELECT COUNT(*) FROM playlists) AS playlist_count
+            """
+        ).fetchone()
+        return dict(row)
+
+    def get_recent_sync_activity(self, limit: int = 20) -> List[sqlite3.Row]:
+        return self.conn.execute(
+            """
+            SELECT sh.*, lt.title, lt.artist, lt.filename
+            FROM sync_history sh
+            LEFT JOIN local_tracks lt ON lt.id = sh.local_track_id
+            ORDER BY sh.synced_at DESC, sh.id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    def get_library_tracks(
+        self,
+        search_text: str = "",
+        match_filter: str = "all",
+        sync_filter: str = "all",
+        playlist: str = "",
+        limit: int = 500,
+    ) -> List[sqlite3.Row]:
+        clauses = []
+        params: List = []
+
+        if search_text:
+            clauses.append("(lt.title LIKE ? OR lt.artist LIKE ? OR lt.filename LIKE ? OR lt.file_path LIKE ?)")
+            like = f"%{search_text}%"
+            params.extend([like, like, like, like])
+
+        if match_filter == "matched":
+            clauses.append("sm.status = 'matched'")
+        elif match_filter == "unresolved":
+            clauses.append("(sm.status = 'unresolved' OR sm.id IS NULL)")
+
+        if sync_filter == "synced":
+            clauses.append("is_synced = 1")
+        elif sync_filter == "unsynced":
+            clauses.append("is_synced = 0")
+
+        if playlist:
+            clauses.append("lt.route_playlist_name = ?")
+            params.append(playlist)
+
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        query = f"""
+            SELECT
+                lt.*,
+                sm.status AS match_status,
+                sm.spotify_uri,
+                sm.spotify_track_name,
+                sm.spotify_artists,
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM sync_history sh
+                    WHERE sh.local_track_id = lt.id AND sh.status = 'added'
+                ) THEN 1 ELSE 0 END AS is_synced
+            FROM local_tracks lt
+            LEFT JOIN spotify_matches sm ON sm.local_track_id = lt.id
+            {where_sql}
+            ORDER BY lt.artist, lt.title
+            LIMIT ?
+        """
+        params.append(limit)
+        return self.conn.execute(query, params).fetchall()
+
+    def get_unresolved_tracks(self, limit: int = 500) -> List[sqlite3.Row]:
+        return self.conn.execute(
+            """
+            SELECT lt.*, sm.status AS match_status, sm.confidence_score
+            FROM local_tracks lt
+            LEFT JOIN spotify_matches sm ON sm.local_track_id = lt.id
+            WHERE sm.status = 'unresolved' OR sm.status = 'error' OR sm.id IS NULL
+            ORDER BY lt.artist, lt.title
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    def get_playlist_routing_summary(self) -> List[sqlite3.Row]:
+        return self.conn.execute(
+            """
+            SELECT
+                COALESCE(lt.route_playlist_name, 'Unsorted') AS playlist_name,
+                p.spotify_playlist_id,
+                COUNT(lt.id) AS local_track_count,
+                SUM(CASE WHEN sm.status = 'matched' THEN 1 ELSE 0 END) AS matched_track_count
+            FROM local_tracks lt
+            LEFT JOIN playlists p ON p.playlist_name = lt.route_playlist_name
+            LEFT JOIN spotify_matches sm ON sm.local_track_id = lt.id
+            GROUP BY COALESCE(lt.route_playlist_name, 'Unsorted'), p.spotify_playlist_id
+            ORDER BY local_track_count DESC, playlist_name
+            """
+        ).fetchall()
+
+    def get_playlist_names(self) -> List[str]:
+        rows = self.conn.execute(
+            """
+            SELECT DISTINCT route_playlist_name AS playlist_name
+            FROM local_tracks
+            WHERE route_playlist_name IS NOT NULL AND route_playlist_name != ''
+            ORDER BY route_playlist_name
+            """
+        ).fetchall()
+        return [row["playlist_name"] for row in rows]
+
     def close(self) -> None:
         self.conn.close()

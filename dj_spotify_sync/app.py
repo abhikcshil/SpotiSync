@@ -5,10 +5,8 @@ import argparse
 from .checker import run_check
 from .config import AppConfig, ensure_default_genre_map, required_env_vars
 from .db import Database
-from .matcher import SpotifyMatcher
-from .scanner import GenreRouter, MusicScanner
+from .services import run_scan, run_sync
 from .spotify_client import SpotifyClient
-from .syncer import PlaylistSyncer
 
 
 def build_spotify_client(config: AppConfig) -> SpotifyClient:
@@ -32,66 +30,20 @@ def build_spotify_client(config: AppConfig) -> SpotifyClient:
 
 
 def cmd_scan(args) -> None:
-    config = AppConfig()
-    ensure_default_genre_map(config.genre_map_path)
-    genre_map = config.load_genre_map()
-    db = Database(config.db_path)
-
-    router = GenreRouter(genre_map, unsorted_playlist=config.unsorted_playlist_name)
-    scanner = MusicScanner(router)
-    tracks = scanner.scan_paths(args.folders)
-
-    inserted = 0
-    for track in tracks:
-        try:
-            db.upsert_local_track(track)
-            inserted += 1
-        except Exception as exc:
-            print(f"[WARN] Failed to store track {track.get('file_path')}: {exc}")
-
-    print(f"Scan complete. Processed {len(tracks)} tracks, saved {inserted} records.")
-    db.close()
+    summary = run_scan(args.folders)
+    for warning in summary["warnings"]:
+        print(f"[WARN] {warning}")
+    print(f"Scan complete. Processed {summary['processed']} tracks, saved {summary['saved']} records.")
 
 
 def cmd_sync(args) -> None:
-    config = AppConfig()
-    ensure_default_genre_map(config.genre_map_path)
-    db = Database(config.db_path)
-    spotify = build_spotify_client(config)
-
-    matcher = SpotifyMatcher(spotify_client=spotify, threshold=config.match_threshold)
-    candidates = db.get_tracks_for_matching(limit=args.limit)
-    print(f"Matching {len(candidates)} local tracks against Spotify...")
-
-    matched = unresolved = errors = 0
-    for row in candidates:
-        result = matcher.match_track(dict(row))
-        payload = {
-            "local_track_id": row["id"],
-            "spotify_uri": result.get("spotify_uri"),
-            "spotify_track_name": result.get("spotify_track_name"),
-            "spotify_artists": result.get("spotify_artists"),
-            "confidence_score": result.get("confidence_score"),
-            "status": result["status"],
-        }
-        db.upsert_spotify_match(payload)
-
-        if result["status"] == "matched":
-            matched += 1
-        elif result["status"] == "unresolved":
-            unresolved += 1
-        else:
-            errors += 1
-
-    syncer = PlaylistSyncer(db=db, spotify_client=spotify)
-    summary = syncer.sync_matched_tracks()
-
+    summary = run_sync(limit=args.limit)
+    print(f"Matching {summary['candidate_count']} local tracks against Spotify...")
     print(
         "Sync complete. "
-        f"matched={matched}, unresolved={unresolved}, errors={errors}, "
+        f"matched={summary['matched']}, unresolved={summary['unresolved']}, errors={summary['errors']}, "
         f"added={summary['added']}, skipped={summary['skipped']}, failed={summary['failed']}"
     )
-    db.close()
 
 
 def cmd_check(args) -> None:
@@ -99,6 +51,12 @@ def cmd_check(args) -> None:
     db = Database(config.db_path)
     run_check(db, query=args.query, limit=args.limit)
     db.close()
+
+
+def cmd_gui(args) -> None:
+    from .web import run_server
+
+    run_server(host=args.host, port=args.port, debug=args.debug)
 
 
 def main() -> None:
@@ -117,6 +75,12 @@ def main() -> None:
     check.add_argument("query", help="Query string (title, artist, or filename)")
     check.add_argument("--limit", type=int, default=10)
     check.set_defaults(func=cmd_check)
+
+    gui = sub.add_parser("gui", help="Run local web GUI")
+    gui.add_argument("--host", default="127.0.0.1")
+    gui.add_argument("--port", type=int, default=5000)
+    gui.add_argument("--debug", action="store_true")
+    gui.set_defaults(func=cmd_gui)
 
     args = parser.parse_args()
     args.func(args)
