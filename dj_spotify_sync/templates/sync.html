@@ -4,31 +4,11 @@
 <form method="post" class="row g-3 align-items-end mb-4">
   <div class="col-md-3">
     <label class="form-label">Limit (optional)</label>
-    <input class="form-control" name="limit" type="number" min="1" placeholder="200">
+    <input class="form-control" name="limit" type="number" min="1" placeholder="200" value="{{ limit }}">
   </div>
   <div class="col-md-3">
-    <button class="btn btn-success" type="submit">Run sync</button>
+    <button class="btn btn-success" type="submit">Start sync</button>
   </div>
 </form>
-
-{% if result %}
-<div class="card">
-  <div class="card-body">
-    <h2 class="h5">Sync summary</h2>
-    <div class="row row-cols-2 row-cols-md-4 g-2">
-      <div>Matched: <strong>{{ result.matched }}</strong></div>
-      <div>Unresolved: <strong>{{ result.unresolved }}</strong></div>
-      <div>Errors: <strong>{{ result.errors }}</strong></div>
-      <div>Added: <strong>{{ result.added }}</strong></div>
-      <div>Skipped: <strong>{{ result.skipped }}</strong></div>
-      <div>Failed: <strong>{{ result.failed }}</strong></div>
-    </div>
-    {% if result.messages %}
-      <hr>
-      <h3 class="h6">Errors</h3>
-      <pre class="log-box">{{ result.messages | join('\n') }}</pre>
-    {% endif %}
-  </div>
-</div>
-{% endif %}
+<p class="text-muted">Sync jobs now run in the background with live status updates.</p>
 {% endblock %}
