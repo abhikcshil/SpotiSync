@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 from .checker import run_check
-from .config import AppConfig, ensure_default_genre_map, required_env_vars
+from .config import AppConfig
 from .db import Database
 from .services import run_scan, run_sync
 from .spotify_client import SpotifyClient
@@ -16,7 +16,7 @@ def build_spotify_client(config: AppConfig) -> SpotifyClient:
         "SPOTIFY_REDIRECT_URI": config.spotify_redirect_uri,
         "SPOTIFY_USERNAME": config.spotify_username,
     }
-    missing = [name for name in required_env_vars() if not required.get(name)]
+    missing = [name for name, value in required.items() if not value]
     if missing:
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
 
@@ -37,7 +37,21 @@ def cmd_scan(args) -> None:
 
 
 def cmd_sync(args) -> None:
-    summary = run_sync(limit=args.limit)
+    summary = run_sync(
+        limit=args.limit,
+        target_playlists=args.genre,
+        since=args.since,
+        recent_limit=args.recent_limit,
+    )
+    active_filters = summary.get("filters", {})
+    if any(active_filters.values()):
+        print(
+            "Filters: "
+            f"genres={active_filters.get('target_playlists') or '-'}, "
+            f"since={active_filters.get('since') or '-'}, "
+            f"recent_limit={active_filters.get('recent_limit') or '-'}, "
+            f"limit={active_filters.get('limit') or '-'}"
+        )
     print(f"Matching {summary['candidate_count']} local tracks against Spotify...")
     print(
         "Sync complete. "
@@ -69,6 +83,23 @@ def main() -> None:
 
     sync = sub.add_parser("sync", help="Match unsynced local tracks and sync to Spotify playlists")
     sync.add_argument("--limit", type=int, default=None, help="Optional limit for tracks to match this run")
+    sync.add_argument(
+        "--genre",
+        action="append",
+        default=None,
+        help="Filter by routed target playlist/genre bucket. Repeat or comma-separate values.",
+    )
+    sync.add_argument(
+        "--since",
+        default=None,
+        help="Only include tracks scanned at/after this value (YYYY-MM-DD or YYYY-MM-DDTHH:MM[:SS]).",
+    )
+    sync.add_argument(
+        "--recent-limit",
+        type=int,
+        default=None,
+        help="Most recent N eligible tracks by last scanned timestamp.",
+    )
     sync.set_defaults(func=cmd_sync)
 
     check = sub.add_parser("check", help="Check whether track exists locally and synced state")

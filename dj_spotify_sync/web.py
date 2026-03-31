@@ -7,7 +7,7 @@ from flask import Flask, abort, flash, jsonify, redirect, render_template, reque
 from .config import AppConfig
 from .db import Database
 from .jobs import job_manager
-from .services import run_check_query, run_scan, run_sync
+from .services import get_sync_target_playlists, run_check_query, run_scan, run_sync
 
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -62,19 +62,41 @@ def scan_page():
 
 @app.route("/sync", methods=["GET", "POST"])
 def sync_page():
+    playlist_options = get_sync_target_playlists()
+
+    selected_playlists: list[str] = []
+    raw_limit = ""
+    raw_since = ""
+    raw_recent_limit = ""
+
     if request.method == "POST":
+        selected_playlists = [value.strip() for value in request.form.getlist("genres") if value.strip()]
         raw_limit = request.form.get("limit", "").strip()
+        raw_since = request.form.get("since", "").strip()
+        raw_recent_limit = request.form.get("recent_limit", "").strip()
+
         try:
             limit = int(raw_limit) if raw_limit else None
+            recent_limit = int(raw_recent_limit) if raw_recent_limit else None
         except ValueError:
-            flash("Limit must be a valid integer.", "danger")
-            return render_template("sync.html", limit=raw_limit)
+            flash("Limit and recent limit must be valid integers.", "danger")
+            return render_template(
+                "sync.html",
+                limit=raw_limit,
+                since=raw_since,
+                recent_limit=raw_recent_limit,
+                playlist_options=playlist_options,
+                selected_playlists=selected_playlists,
+            )
 
         job = job_manager.create_job("sync")
 
         def _run_sync_job() -> dict:
             return run_sync(
                 limit=limit,
+                target_playlists=selected_playlists,
+                since=raw_since or None,
+                recent_limit=recent_limit,
                 progress_callback=lambda current, total, message, extra=None: job_manager.update_progress(
                     job.job_id, current=current, total=total, message=message, extra=extra
                 ),
@@ -83,7 +105,14 @@ def sync_page():
         job_manager.start_job(job, _run_sync_job)
         return redirect(url_for("job_page", job_id=job.job_id))
 
-    return render_template("sync.html", limit="")
+    return render_template(
+        "sync.html",
+        limit=raw_limit,
+        since=raw_since,
+        recent_limit=raw_recent_limit,
+        playlist_options=playlist_options,
+        selected_playlists=selected_playlists,
+    )
 
 
 @app.route("/jobs/<job_id>")
@@ -106,19 +135,22 @@ def job_status(job_id: str):
 def check_page():
     rows = []
     query = ""
+    local_match_count = 0
     if request.method == "POST":
         query = request.form.get("query", "").strip()
         if not query:
             flash("Please enter a search query.", "danger")
         else:
             try:
-                rows = run_check_query(query, limit=50)
+                result = run_check_query(query, limit=50)
+                rows = result["rows"]
+                local_match_count = result["local_match_count"]
                 if not rows:
                     flash("No matching local tracks found.", "warning")
             except Exception as exc:
                 flash(f"Check failed: {exc}", "danger")
 
-    return render_template("check.html", rows=rows, query=query)
+    return render_template("check.html", rows=rows, query=query, local_match_count=local_match_count)
 
 
 @app.route("/library")

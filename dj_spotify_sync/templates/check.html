@@ -9,24 +9,43 @@
   <div class="col-md-2"><button class="btn btn-info" type="submit">Search</button></div>
 </form>
 
+{% if query %}
+<p class="text-muted">Local candidates found: <strong>{{ local_match_count }}</strong></p>
+{% endif %}
+
 {% if rows %}
 <div class="table-responsive">
 <table class="table table-striped table-sm">
-  <thead><tr><th>Local</th><th>Exists locally</th><th>Spotify match</th><th>Target playlist</th><th>Synced</th></tr></thead>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Local candidate</th>
+      <th>Routing</th>
+      <th>Spotify match</th>
+      <th>Sync status</th>
+    </tr>
+  </thead>
   <tbody>
   {% for row in rows %}
   <tr>
+    <td>{{ loop.index }}</td>
     <td>
       <div>{{ row.artist or 'Unknown Artist' }} - {{ row.title or row.filename }}</div>
+      <div class="small text-muted">Genre: {{ row.genre or '-' }}</div>
       <div class="small text-muted">{{ row.file_path }}</div>
     </td>
-    <td><span class="badge bg-success">yes</span></td>
+    <td>{{ row.route_playlist_name or 'Unsorted' }}</td>
     <td>
       <div>Status: <span class="badge bg-{% if row.match_status == 'matched' %}success{% elif row.match_status == 'unresolved' %}warning{% elif row.match_status == 'error' %}danger{% else %}secondary{% endif %}">{{ row.match_status or 'not-matched' }}</span></div>
-      <div class="small">{{ row.spotify_track_name or '-' }} {{ row.spotify_uri or '' }}</div>
+      <div class="small">{{ row.spotify_track_name or '-' }}{% if row.spotify_artists %} · {{ row.spotify_artists }}{% endif %}</div>
+      <div class="small text-muted">{{ row.spotify_uri or '-' }}</div>
     </td>
-    <td>{{ row.route_playlist_name or 'Unsorted' }}</td>
-    <td><span class="badge bg-{% if row.is_synced %}success{% else %}secondary{% endif %}">{% if row.is_synced %}yes{% else %}no{% endif %}</span></td>
+    <td>
+      <div><span class="badge bg-{% if row.is_synced %}success{% else %}secondary{% endif %}">{% if row.is_synced %}synced{% else %}not synced{% endif %}</span></div>
+      {% if row.last_sync_status %}
+      <div class="small text-muted">Last: {{ row.last_sync_status }} ({{ row.last_synced_at or '-' }})</div>
+      {% endif %}
+    </td>
   </tr>
   {% endfor %}
   </tbody>

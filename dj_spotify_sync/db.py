@@ -107,16 +107,68 @@ class Database:
         row = self.conn.execute("SELECT id FROM local_tracks WHERE file_path = ?", (file_path,)).fetchone()
         return int(row["id"])
 
-    def get_tracks_for_matching(self, limit: Optional[int] = None) -> List[sqlite3.Row]:
+    def _build_track_filter_clauses(
+        self,
+        target_playlists: Optional[List[str]] = None,
+        since: Optional[str] = None,
+    ) -> tuple[List[str], List]:
+        clauses: List[str] = []
+        params: List = []
+
+        if target_playlists:
+            include_unsorted = any(name.lower() == "unsorted" for name in target_playlists)
+            named_playlists = [name for name in target_playlists if name.lower() != "unsorted"]
+
+            playlist_clauses: List[str] = []
+            if named_playlists:
+                placeholders = ", ".join("?" for _ in named_playlists)
+                playlist_clauses.append(f"lt.route_playlist_name IN ({placeholders})")
+                params.extend(named_playlists)
+            if include_unsorted:
+                playlist_clauses.append("(lt.route_playlist_name IS NULL OR lt.route_playlist_name = '')")
+            if playlist_clauses:
+                clauses.append(f"({' OR '.join(playlist_clauses)})")
+
+        if since:
+            clauses.append("lt.last_scanned_at >= ?")
+            params.append(since)
+
+        return clauses, params
+
+    @staticmethod
+    def _effective_limit(limit: Optional[int], recent_limit: Optional[int]) -> Optional[int]:
+        values = [v for v in (limit, recent_limit) if isinstance(v, int) and v > 0]
+        if not values:
+            return None
+        return min(values)
+
+    def get_tracks_for_matching(
+        self,
+        limit: Optional[int] = None,
+        target_playlists: Optional[List[str]] = None,
+        since: Optional[str] = None,
+        recent_limit: Optional[int] = None,
+    ) -> List[sqlite3.Row]:
+        clauses, params = self._build_track_filter_clauses(target_playlists=target_playlists, since=since)
+        clauses.append("(sm.id IS NULL OR sm.status IN ('unresolved', 'error'))")
+        where_sql = f"WHERE {' AND '.join(clauses)}"
+
         query = (
             "SELECT lt.* FROM local_tracks lt "
             "LEFT JOIN spotify_matches sm ON sm.local_track_id = lt.id "
-            "WHERE sm.id IS NULL OR sm.status IN ('unresolved', 'error')"
+            f"{where_sql} "
         )
-        params: List = []
-        if limit:
-            query += " LIMIT ?"
-            params.append(limit)
+
+        if recent_limit:
+            query += "ORDER BY lt.last_scanned_at DESC, lt.id DESC "
+        else:
+            query += "ORDER BY lt.id ASC "
+
+        effective_limit = self._effective_limit(limit, recent_limit)
+        if effective_limit:
+            query += "LIMIT ?"
+            params.append(effective_limit)
+
         return self.conn.execute(query, params).fetchall()
 
     def upsert_spotify_match(self, payload: Dict) -> None:
@@ -145,15 +197,31 @@ class Database:
         )
         self.conn.commit()
 
-    def get_matched_tracks_for_sync(self) -> List[sqlite3.Row]:
-        return self.conn.execute(
-            """
-            SELECT lt.*, sm.spotify_uri, sm.status as match_status, sm.confidence_score
-            FROM local_tracks lt
-            JOIN spotify_matches sm ON sm.local_track_id = lt.id
-            WHERE sm.status = 'matched' AND sm.spotify_uri IS NOT NULL
-            """
-        ).fetchall()
+    def get_matched_tracks_for_sync(
+        self,
+        target_playlists: Optional[List[str]] = None,
+        since: Optional[str] = None,
+        recent_limit: Optional[int] = None,
+    ) -> List[sqlite3.Row]:
+        clauses, params = self._build_track_filter_clauses(target_playlists=target_playlists, since=since)
+        clauses.append("sm.status = 'matched'")
+        clauses.append("sm.spotify_uri IS NOT NULL")
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        query = (
+            "SELECT lt.*, sm.spotify_uri, sm.status as match_status, sm.confidence_score "
+            "FROM local_tracks lt "
+            "JOIN spotify_matches sm ON sm.local_track_id = lt.id "
+            f"{where_sql} "
+        )
+
+        if recent_limit:
+            query += "ORDER BY lt.last_scanned_at DESC, lt.id DESC LIMIT ?"
+            params.append(recent_limit)
+        else:
+            query += "ORDER BY lt.id ASC"
+
+        return self.conn.execute(query, params).fetchall()
 
     def upsert_playlist(self, playlist_name: str, spotify_playlist_id: str, snapshot_id: Optional[str]) -> None:
         self.conn.execute(
@@ -194,15 +262,38 @@ class Database:
         like = f"%{query_text}%"
         return self.conn.execute(
             """
-            SELECT lt.*, sm.spotify_uri, sm.spotify_track_name, sm.status as match_status,
-                   EXISTS(
-                     SELECT 1 FROM sync_history sh
-                     WHERE sh.local_track_id = lt.id AND sh.status = 'added'
-                   ) as is_synced
+            SELECT
+                lt.*,
+                sm.spotify_uri,
+                sm.spotify_track_name,
+                sm.spotify_artists,
+                sm.status as match_status,
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM sync_history sh
+                    WHERE sh.local_track_id = lt.id AND sh.status = 'added'
+                ) THEN 1 ELSE 0 END as is_synced,
+                (
+                    SELECT sh.status FROM sync_history sh
+                    WHERE sh.local_track_id = lt.id
+                    ORDER BY sh.synced_at DESC, sh.id DESC
+                    LIMIT 1
+                ) AS last_sync_status,
+                (
+                    SELECT sh.playlist_name FROM sync_history sh
+                    WHERE sh.local_track_id = lt.id
+                    ORDER BY sh.synced_at DESC, sh.id DESC
+                    LIMIT 1
+                ) AS last_synced_playlist,
+                (
+                    SELECT sh.synced_at FROM sync_history sh
+                    WHERE sh.local_track_id = lt.id
+                    ORDER BY sh.synced_at DESC, sh.id DESC
+                    LIMIT 1
+                ) AS last_synced_at
             FROM local_tracks lt
             LEFT JOIN spotify_matches sm ON sm.local_track_id = lt.id
             WHERE lt.title LIKE ? OR lt.artist LIKE ? OR lt.filename LIKE ?
-            ORDER BY lt.artist, lt.title
+            ORDER BY lt.last_scanned_at DESC, lt.artist, lt.title
             LIMIT ?
             """,
             (like, like, like, limit),
@@ -312,6 +403,27 @@ class Database:
             ORDER BY local_track_count DESC, playlist_name
             """
         ).fetchall()
+
+    def get_sync_target_playlists(self) -> List[str]:
+        rows = self.conn.execute(
+            """
+            SELECT playlist_name
+            FROM (
+                SELECT route_playlist_name AS playlist_name, 0 AS ord
+                FROM local_tracks
+                WHERE route_playlist_name IS NOT NULL AND route_playlist_name != ''
+                GROUP BY route_playlist_name
+
+                UNION ALL
+
+                SELECT 'Unsorted' AS playlist_name, 1 AS ord
+                FROM local_tracks
+                WHERE route_playlist_name IS NULL OR route_playlist_name = ''
+            )
+            ORDER BY ord, playlist_name
+            """
+        ).fetchall()
+        return [row["playlist_name"] for row in rows]
 
     def get_playlist_names(self) -> List[str]:
         rows = self.conn.execute(
