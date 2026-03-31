@@ -1,25 +1,80 @@
 {
   "genre_to_playlist": {
     "latin": "Latin",
-    "reggaeton": "Latin",
-    "dembow": "Latin",
-    "salsa": "Latin",
-    "bachata": "Latin",
-    "afrobeat": "Afro",
-    "afrobeats": "Afro",
-    "amapiano": "Afro",
+    "brazilian funk": "Brazilian Funk",
+
+    "afro": "Afro",
+    "afro house": "Afro House",
+
     "house": "House",
-    "tech house": "House",
-    "deep house": "House",
-    "hip hop": "Hip-Hop",
+    "bh house": "Bass House",
+    "house 2026": "House",
+
+    "bh bass house": "Bass House",
+    "bh dubstep": "Dubstep",
+    "bh riddim": "Riddim",
+
+    "edm": "EDM",
+    "edm heroic": "EDM",
+
+    "dnb": "DnB",
+    "hype dnb": "DnB",
+
+    "jersey club": "Jersey Club",
+
+    "dance hall": "Dancehall",
+
     "rap": "Hip-Hop",
-    "pop": "Pop"
+    "rap cs": "Rap Classics",
+
+    "pop": "Pop",
+
+    "punjabi": "Punjabi",
+    "hindi": "Desi",
+    "hindi bangers": "Desi",
+    "south indian": "South Indian",
+
+    "country": "Country",
+    "rock": "Rock",
+
+    "throwback": "Throwback",
+    "y2k": "Y2K",
+
+    "party": "Party",
+
+    "line dance": "Line Dance",
+
+    "mixes": "Unsorted",
+    "music": "Unsorted",
+    "tbd": "Unsorted",
+    "tbd 2": "Unsorted",
+    "redownload": "Unsorted",
+    "uf": "Unsorted",
+    "crunch": "Unsorted"
   },
   "manual_overrides": [
     {
       "match_type": "contains",
       "field": "filename",
       "pattern": "promo",
+      "playlist": "Unsorted"
+    },
+    {
+      "match_type": "contains",
+      "field": "filename",
+      "pattern": "intro",
+      "playlist": "Unsorted"
+    },
+    {
+      "match_type": "contains",
+      "field": "filename",
+      "pattern": "outro",
+      "playlist": "Unsorted"
+    },
+    {
+      "match_type": "contains",
+      "field": "filename",
+      "pattern": "edit",
       "playlist": "Unsorted"
     }
   ]
