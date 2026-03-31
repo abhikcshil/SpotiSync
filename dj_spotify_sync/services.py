@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
@@ -11,6 +12,62 @@ from .syncer import PlaylistSyncer
 from .spotify_client import SpotifyClient
 
 ProgressCallback = Callable[[int, Optional[int], str, Optional[Dict]], None]
+
+
+def _normalize_since_value(since: Optional[str]) -> Optional[str]:
+    if not since:
+        return None
+    since = since.strip()
+    if not since:
+        return None
+
+    parse_formats = [
+        "%Y-%m-%d",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%dT%H:%M:%S",
+    ]
+    for fmt in parse_formats:
+        try:
+            parsed = datetime.strptime(since, fmt)
+            if fmt == "%Y-%m-%d":
+                parsed = parsed.replace(hour=0, minute=0, second=0)
+            return parsed.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+    raise ValueError("Invalid --since format. Use YYYY-MM-DD or YYYY-MM-DDTHH:MM[:SS].")
+
+
+def _normalize_target_playlists(target_playlists: Optional[Iterable[str]]) -> List[str]:
+    if not target_playlists:
+        return []
+    normalized: List[str] = []
+    for value in target_playlists:
+        if value is None:
+            continue
+        parts = [part.strip() for part in str(value).split(",")]
+        normalized.extend([part for part in parts if part])
+    seen = set()
+    ordered: List[str] = []
+    for name in normalized:
+        key = name.lower()
+        if key not in seen:
+            seen.add(key)
+            ordered.append(name)
+    return ordered
+
+
+def _validate_target_playlists(db: Database, target_playlists: List[str]) -> None:
+    if not target_playlists:
+        return
+    available = db.get_sync_target_playlists()
+    available_map = {name.lower(): name for name in available}
+    invalid = [name for name in target_playlists if name.lower() not in available_map]
+    if invalid:
+        raise ValueError(
+            f"Invalid playlist/genre filter(s): {', '.join(invalid)}. "
+            f"Available: {', '.join(available) if available else '(none)'}"
+        )
 
 
 def run_scan(
@@ -73,12 +130,19 @@ def run_scan(
 
 def run_sync(
     limit: Optional[int] = None,
+    target_playlists: Optional[Iterable[str]] = None,
+    since: Optional[str] = None,
+    recent_limit: Optional[int] = None,
     config: Optional[AppConfig] = None,
     progress_callback: Optional[ProgressCallback] = None,
 ) -> Dict:
     cfg = config or AppConfig()
     ensure_default_genre_map(cfg.genre_map_path)
     db = Database(cfg.db_path)
+    normalized_playlists = _normalize_target_playlists(target_playlists)
+    normalized_since = _normalize_since_value(since)
+    _validate_target_playlists(db, normalized_playlists)
+
     required = {
         "SPOTIFY_CLIENT_ID": cfg.spotify_client_id,
         "SPOTIFY_CLIENT_SECRET": cfg.spotify_client_secret,
@@ -98,7 +162,12 @@ def run_sync(
     )
 
     matcher = SpotifyMatcher(spotify_client=spotify, threshold=cfg.match_threshold)
-    candidates = db.get_tracks_for_matching(limit=limit)
+    candidates = db.get_tracks_for_matching(
+        limit=limit,
+        target_playlists=normalized_playlists,
+        since=normalized_since,
+        recent_limit=recent_limit,
+    )
     candidate_total = len(candidates)
 
     matched = unresolved = errors = 0
@@ -144,7 +213,11 @@ def run_sync(
                 {"phase": "matching_tracks", "warnings_count": len(match_errors)},
             )
 
-    tracks_for_sync = db.get_matched_tracks_for_sync()
+    tracks_for_sync = db.get_matched_tracks_for_sync(
+        target_playlists=normalized_playlists,
+        since=normalized_since,
+        recent_limit=recent_limit,
+    )
     sync_total = len(tracks_for_sync)
     overall_total = candidate_total + sync_total
 
@@ -179,12 +252,30 @@ def run_sync(
         "skipped": sync_summary["skipped"],
         "failed": sync_summary["failed"],
         "messages": match_errors,
+        "filters": {
+            "target_playlists": normalized_playlists,
+            "since": normalized_since,
+            "recent_limit": recent_limit,
+            "limit": limit,
+        },
     }
 
 
-def run_check_query(query: str, limit: int = 10, config: Optional[AppConfig] = None) -> List[Dict]:
+def run_check_query(query: str, limit: int = 10, config: Optional[AppConfig] = None) -> Dict:
     cfg = config or AppConfig()
     db = Database(cfg.db_path)
     rows = [dict(row) for row in db.check_track(query, limit=limit)]
     db.close()
-    return rows
+    return {
+        "query": query,
+        "local_match_count": len(rows),
+        "rows": rows,
+    }
+
+
+def get_sync_target_playlists(config: Optional[AppConfig] = None) -> List[str]:
+    cfg = config or AppConfig()
+    db = Database(cfg.db_path)
+    playlists = db.get_sync_target_playlists()
+    db.close()
+    return playlists
