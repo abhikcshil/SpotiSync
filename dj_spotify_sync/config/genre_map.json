@@ -1,0 +1,26 @@
+{
+  "genre_to_playlist": {
+    "latin": "Latin",
+    "reggaeton": "Latin",
+    "dembow": "Latin",
+    "salsa": "Latin",
+    "bachata": "Latin",
+    "afrobeat": "Afro",
+    "afrobeats": "Afro",
+    "amapiano": "Afro",
+    "house": "House",
+    "tech house": "House",
+    "deep house": "House",
+    "hip hop": "Hip-Hop",
+    "rap": "Hip-Hop",
+    "pop": "Pop"
+  },
+  "manual_overrides": [
+    {
+      "match_type": "contains",
+      "field": "filename",
+      "pattern": "promo",
+      "playlist": "Unsorted"
+    }
+  ]
+}
