@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import argparse
 import json
+from io import BytesIO
 
-from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
+from flask import Flask, abort, flash, jsonify, redirect, render_template, request, send_file, url_for
 
 from .config import AppConfig
 from .db import Database
 from .jobs import job_manager
-from .services import get_sync_target_playlists, run_check_query, run_reconcile, run_scan, run_sync
+from .services import (
+    build_download_queue_csv,
+    get_sync_target_playlists,
+    run_check_query,
+    run_gap_detection,
+    run_reconcile,
+    run_scan,
+    run_sync,
+)
 
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -309,6 +318,38 @@ def playlists_page():
 def settings_page():
     config = _get_config()
     return render_template("settings.html", config=config)
+
+
+@app.route("/gap", methods=["GET", "POST"])
+def gap_page():
+    raw_sources = ""
+    gap_result = None
+
+    if request.method == "POST":
+        raw_sources = request.form.get("sources", "").strip()
+        if not raw_sources:
+            flash("Please provide at least one Spotify playlist URL/ID.", "danger")
+            return render_template("gap.html", sources=raw_sources, gap_result=gap_result)
+
+        source_refs = [line.strip() for line in raw_sources.splitlines() if line.strip()]
+
+        try:
+            gap_result = run_gap_detection(source_refs)
+            action = request.form.get("action", "run")
+            if action == "export_csv":
+                csv_payload = build_download_queue_csv(gap_result["queue"])
+                csv_bytes = csv_payload.encode("utf-8")
+                return send_file(
+                    BytesIO(csv_bytes),
+                    mimetype="text/csv",
+                    as_attachment=True,
+                    download_name="spoti_gap_download_queue.csv",
+                )
+        except Exception as exc:
+            flash(f"Gap detection failed: {exc}", "danger")
+            return render_template("gap.html", sources=raw_sources, gap_result=gap_result)
+
+    return render_template("gap.html", sources=raw_sources, gap_result=gap_result)
 
 
 @app.route("/health")

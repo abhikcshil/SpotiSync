@@ -5,7 +5,7 @@ import argparse
 from .checker import run_check
 from .config import AppConfig
 from .db import Database
-from .services import run_reconcile, run_scan, run_sync
+from .services import build_download_queue_csv, run_gap_detection, run_reconcile, run_scan, run_sync
 from .spotify_client import SpotifyClient
 
 
@@ -94,6 +94,22 @@ def cmd_gui(args) -> None:
     run_server(host=args.host, port=args.port, debug=args.debug)
 
 
+def cmd_gap(args) -> None:
+    sources = args.playlist or []
+    result = run_gap_detection(sources)
+    summary = result["summary"]
+    print(
+        "Gap detection complete. "
+        f"total={summary['total_source_tracks']}, present={summary['present_count']}, "
+        f"missing={summary['missing_count']}, ambiguous={summary['ambiguous_count']}"
+    )
+    if args.export_csv:
+        csv_payload = build_download_queue_csv(result["queue"])
+        with open(args.export_csv, "w", encoding="utf-8", newline="") as handle:
+            handle.write(csv_payload)
+        print(f"Download queue CSV exported: {args.export_csv} ({summary['queue_count']} rows)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="DJ local library to Spotify playlist sync MVP")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -152,6 +168,20 @@ def main() -> None:
     gui.add_argument("--port", type=int, default=5000)
     gui.add_argument("--debug", action="store_true")
     gui.set_defaults(func=cmd_gui)
+
+    gap = sub.add_parser("gap", help="Detect Spotify source tracks missing from local library")
+    gap.add_argument(
+        "--playlist",
+        action="append",
+        required=True,
+        help="Spotify playlist URL/URI/ID. Repeat or comma-separate for multiple playlists.",
+    )
+    gap.add_argument(
+        "--export-csv",
+        default=None,
+        help="Optional CSV path for missing-track download queue export.",
+    )
+    gap.set_defaults(func=cmd_gap)
 
     args = parser.parse_args()
     args.func(args)

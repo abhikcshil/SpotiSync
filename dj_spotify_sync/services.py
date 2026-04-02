@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import csv
+import io
 from datetime import datetime
 from typing import Callable, Dict, Iterable, List, Optional
+
+from rapidfuzz import fuzz
 
 from .config import AppConfig, ensure_default_genre_map
 from .db import Database
@@ -10,6 +14,7 @@ from .matcher import SpotifyMatcher
 from .scanner import GenreRouter, MusicScanner
 from .spotify_client import SpotifyClient
 from .syncer import PlaylistSyncer
+from .utils import normalize_text
 
 ProgressCallback = Callable[[int, Optional[int], str, Optional[Dict]], None]
 
@@ -602,3 +607,302 @@ def get_sync_target_playlists(config: Optional[AppConfig] = None) -> List[str]:
     playlists = db.get_sync_target_playlists()
     db.close()
     return playlists
+
+
+def _build_spotify_client(config: AppConfig) -> SpotifyClient:
+    required = {
+        "SPOTIFY_CLIENT_ID": config.spotify_client_id,
+        "SPOTIFY_CLIENT_SECRET": config.spotify_client_secret,
+        "SPOTIFY_REDIRECT_URI": config.spotify_redirect_uri,
+        "SPOTIFY_USERNAME": config.spotify_username,
+    }
+    missing = [name for name, value in required.items() if not value]
+    if missing:
+        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
+
+    return SpotifyClient(
+        client_id=config.spotify_client_id,
+        client_secret=config.spotify_client_secret,
+        redirect_uri=config.spotify_redirect_uri,
+        username=config.spotify_username,
+        market=config.market,
+    )
+
+
+def _split_source_refs(source_refs: Iterable[str]) -> List[str]:
+    refs: List[str] = []
+    for value in source_refs:
+        for part in str(value).split(","):
+            cleaned = part.strip()
+            if cleaned:
+                refs.append(cleaned)
+    return refs
+
+
+def _collect_ambiguous_candidates(source_title: str, source_artists: str, indexed_local_tracks: List[Dict]) -> List[Dict]:
+    if not source_title:
+        return []
+    title_norm = normalize_text(source_title)
+    artist_norm = normalize_text(source_artists)
+    candidates: List[Dict] = []
+    for local_track in indexed_local_tracks:
+        local_title = normalize_text(local_track.get("title") or local_track.get("filename") or "")
+        local_artist = normalize_text(local_track.get("artist") or "")
+        if not local_title:
+            continue
+        title_score = fuzz.token_set_ratio(title_norm, local_title)
+        artist_score = fuzz.token_set_ratio(artist_norm, local_artist) if artist_norm and local_artist else 0
+        if title_score >= 92 and (not artist_norm or artist_score >= 72):
+            candidates.append(
+                {
+                    "local_track_id": local_track["id"],
+                    "file_path": local_track.get("file_path"),
+                    "title": local_track.get("title"),
+                    "artist": local_track.get("artist"),
+                    "title_score": round(title_score, 2),
+                    "artist_score": round(artist_score, 2),
+                }
+            )
+    return candidates[:3]
+
+
+def run_gap_detection(
+    source_refs: Iterable[str],
+    *,
+    config: Optional[AppConfig] = None,
+    progress_callback: Optional[ProgressCallback] = None,
+    job_id: Optional[str] = None,
+) -> Dict:
+    cfg = config or AppConfig()
+    db = Database(cfg.db_path)
+    refs = _split_source_refs(source_refs)
+    if not refs:
+        db.close()
+        raise ValueError("At least one Spotify playlist URL/URI/ID is required.")
+
+    _log_activity(
+        db,
+        source="gap",
+        event_type="gap_started",
+        status="started",
+        summary=f"Gap detection started for {len(refs)} source playlist(s)",
+        detail={"sources": refs},
+        job_id=job_id,
+    )
+
+    spotify = _build_spotify_client(cfg)
+    detected_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    results: List[Dict] = []
+    queue_items: List[Dict] = []
+
+    try:
+        if progress_callback:
+            progress_callback(0, len(refs), "Preparing gap detection...", {"phase": "prepare"})
+
+        all_items: List[Dict] = []
+        source_summaries: List[Dict] = []
+        for idx, raw_ref in enumerate(refs, start=1):
+            playlist_id = spotify.parse_playlist_id(raw_ref)
+            playlist = spotify.get_playlist(playlist_id)
+            source_tracks = spotify.get_playlist_tracks(playlist_id)
+            source_name = playlist.get("name") or playlist_id
+            source_url = (playlist.get("external_urls") or {}).get("spotify")
+            total_items = len(source_tracks)
+
+            if progress_callback:
+                progress_callback(
+                    idx - 1,
+                    len(refs),
+                    f"Fetched {total_items} items from {source_name}",
+                    {"phase": "fetch_sources"},
+                )
+
+            valid_track_items = 0
+            skipped_items = 0
+            for position, item in enumerate(source_tracks, start=1):
+                track = item.get("track") or {}
+                if item.get("is_local"):
+                    skipped_items += 1
+                    continue
+                if track.get("type") != "track":
+                    skipped_items += 1
+                    continue
+                spotify_uri = track.get("uri")
+                spotify_track_id = track.get("id")
+                if not spotify_uri or not spotify_track_id:
+                    skipped_items += 1
+                    continue
+                artists = ", ".join(a.get("name", "") for a in track.get("artists", []) if a.get("name"))
+                all_items.append(
+                    {
+                        "spotify_uri": spotify_uri,
+                        "spotify_track_id": spotify_track_id,
+                        "spotify_track_name": track.get("name"),
+                        "spotify_artists": artists,
+                        "spotify_album": (track.get("album") or {}).get("name"),
+                        "spotify_external_url": (track.get("external_urls") or {}).get("spotify"),
+                        "source_playlist_id": playlist_id,
+                        "source_playlist_name": source_name,
+                        "source_playlist_url": source_url,
+                        "source_ref": raw_ref,
+                        "added_at": item.get("added_at"),
+                        "source_position": position,
+                    }
+                )
+                valid_track_items += 1
+
+            source_summaries.append(
+                {
+                    "source_ref": raw_ref,
+                    "source_playlist_id": playlist_id,
+                    "source_playlist_name": source_name,
+                    "source_playlist_url": source_url,
+                    "source_total_items": total_items,
+                    "source_valid_tracks": valid_track_items,
+                    "source_skipped_items": skipped_items,
+                }
+            )
+            if progress_callback:
+                progress_callback(idx, len(refs), f"Prepared source {idx} of {len(refs)}", {"phase": "fetch_sources"})
+
+        exact_uri_matches = db.get_exact_uri_matches([item["spotify_uri"] for item in all_items])
+        local_index = [dict(row) for row in db.get_local_tracks_for_gap_index()]
+        local_for_ambiguous = [row for row in local_index if not row.get("spotify_uri")]
+
+        total_items = len(all_items)
+        for idx, item in enumerate(all_items, start=1):
+            uri = item["spotify_uri"]
+            exact = exact_uri_matches.get(uri, [])
+            if exact:
+                local = exact[0]
+                status = "present"
+                result = {
+                    **item,
+                    "status": status,
+                    "status_reason": "Exact matched Spotify URI exists in local DB",
+                    "local_track_id": local.get("local_track_id"),
+                    "local_file_path": local.get("file_path"),
+                    "local_title": local.get("title"),
+                    "local_artist": local.get("artist"),
+                    "ambiguous_candidates": [],
+                }
+            else:
+                candidates = _collect_ambiguous_candidates(
+                    source_title=item.get("spotify_track_name") or "",
+                    source_artists=item.get("spotify_artists") or "",
+                    indexed_local_tracks=local_for_ambiguous,
+                )
+                if candidates:
+                    status = "ambiguous"
+                    result = {
+                        **item,
+                        "status": status,
+                        "status_reason": "Potential local metadata match found; review suggested",
+                        "local_track_id": None,
+                        "local_file_path": None,
+                        "local_title": None,
+                        "local_artist": None,
+                        "ambiguous_candidates": candidates,
+                    }
+                else:
+                    status = "missing"
+                    result = {
+                        **item,
+                        "status": status,
+                        "status_reason": "No exact or likely local match found",
+                        "local_track_id": None,
+                        "local_file_path": None,
+                        "local_title": None,
+                        "local_artist": None,
+                        "ambiguous_candidates": [],
+                    }
+                    queue_items.append(
+                        {
+                            "spotify_track_name": item.get("spotify_track_name"),
+                            "spotify_artists": item.get("spotify_artists"),
+                            "spotify_album": item.get("spotify_album"),
+                            "spotify_uri": item.get("spotify_uri"),
+                            "spotify_track_id": item.get("spotify_track_id"),
+                            "spotify_external_url": item.get("spotify_external_url"),
+                            "source_playlist_name": item.get("source_playlist_name"),
+                            "source_playlist_id": item.get("source_playlist_id"),
+                            "source_playlist_url": item.get("source_playlist_url"),
+                            "source_position": item.get("source_position"),
+                            "added_at": item.get("added_at"),
+                            "detected_at": detected_at,
+                            "notes": "Missing local representation",
+                        }
+                    )
+            results.append(result)
+            if progress_callback:
+                progress_callback(idx, total_items, f"Compared {idx} of {total_items} tracks", {"phase": "compare"})
+
+        summary = {
+            "sources_count": len(refs),
+            "total_source_tracks": len(results),
+            "present_count": sum(1 for row in results if row["status"] == "present"),
+            "missing_count": sum(1 for row in results if row["status"] == "missing"),
+            "ambiguous_count": sum(1 for row in results if row["status"] == "ambiguous"),
+            "queue_count": len(queue_items),
+            "detected_at": detected_at,
+        }
+        payload = {
+            "summary": summary,
+            "sources": source_summaries,
+            "results": results,
+            "present": [row for row in results if row["status"] == "present"],
+            "missing": [row for row in results if row["status"] == "missing"],
+            "ambiguous": [row for row in results if row["status"] == "ambiguous"],
+            "queue": queue_items,
+        }
+        _log_activity(
+            db,
+            source="gap",
+            event_type="gap_completed",
+            status="completed",
+            summary=(
+                f"Gap detection completed: total={summary['total_source_tracks']} "
+                f"present={summary['present_count']} missing={summary['missing_count']} "
+                f"ambiguous={summary['ambiguous_count']}"
+            ),
+            detail={"summary": summary, "sources": source_summaries},
+            job_id=job_id,
+        )
+        return payload
+    except Exception as exc:
+        _log_activity(
+            db,
+            source="gap",
+            event_type="gap_failed",
+            status="failed",
+            summary=f"Gap detection failed: {exc}",
+            detail={"sources": refs, "error": str(exc)},
+            job_id=job_id,
+        )
+        raise
+    finally:
+        db.close()
+
+
+def build_download_queue_csv(queue_rows: List[Dict]) -> str:
+    fields = [
+        "spotify_track_name",
+        "spotify_artists",
+        "spotify_album",
+        "spotify_uri",
+        "spotify_track_id",
+        "spotify_external_url",
+        "source_playlist_name",
+        "source_playlist_id",
+        "source_playlist_url",
+        "source_position",
+        "added_at",
+        "detected_at",
+        "notes",
+    ]
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=fields)
+    writer.writeheader()
+    for row in queue_rows:
+        writer.writerow({key: row.get(key) for key in fields})
+    return buffer.getvalue()

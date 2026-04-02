@@ -1,0 +1,94 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1 class="mb-3">Spotify Local Gap Detector</h1>
+<p class="text-muted">Inspect Spotify playlists and generate a missing-track download queue.</p>
+
+<form method="post" class="card p-3 mb-4">
+  <div class="mb-3">
+    <label class="form-label">Spotify playlist URL / URI / ID (one per line)</label>
+    <textarea class="form-control" name="sources" rows="4" placeholder="https://open.spotify.com/playlist/...">{{ sources }}</textarea>
+  </div>
+  <div class="d-flex gap-2">
+    <button class="btn btn-primary" type="submit" name="action" value="run">Run Gap Detection</button>
+    <button class="btn btn-outline-success" type="submit" name="action" value="export_csv">Export Missing Queue CSV</button>
+  </div>
+</form>
+
+{% if gap_result %}
+  {% set summary = gap_result.summary %}
+  <div class="row g-3 mb-3">
+    <div class="col-md-3"><div class="card stat-card"><div class="card-body"><h6>Total Source Tracks</h6><h3>{{ summary.total_source_tracks }}</h3></div></div></div>
+    <div class="col-md-3"><div class="card stat-card"><div class="card-body"><h6>Present Locally</h6><h3>{{ summary.present_count }}</h3></div></div></div>
+    <div class="col-md-3"><div class="card stat-card"><div class="card-body"><h6>Missing Locally</h6><h3>{{ summary.missing_count }}</h3></div></div></div>
+    <div class="col-md-3"><div class="card stat-card"><div class="card-body"><h6>Ambiguous</h6><h3>{{ summary.ambiguous_count }}</h3></div></div></div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header">Missing locally (Download Queue)</div>
+    <div class="table-responsive">
+      <table class="table table-sm table-striped mb-0">
+        <thead><tr><th>Track</th><th>Artists</th><th>Album</th><th>Source Playlist</th><th>URI</th></tr></thead>
+        <tbody>
+          {% for row in gap_result.missing %}
+            <tr>
+              <td>{{ row.spotify_track_name }}</td>
+              <td>{{ row.spotify_artists }}</td>
+              <td>{{ row.spotify_album or '-' }}</td>
+              <td>{{ row.source_playlist_name }}</td>
+              <td><code>{{ row.spotify_uri }}</code></td>
+            </tr>
+          {% else %}
+            <tr><td colspan="5" class="text-muted">No missing tracks found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header">Ambiguous / possible local matches</div>
+    <div class="table-responsive">
+      <table class="table table-sm table-striped mb-0">
+        <thead><tr><th>Spotify Track</th><th>Artists</th><th>Source Playlist</th><th>Possible Local Matches</th></tr></thead>
+        <tbody>
+          {% for row in gap_result.ambiguous %}
+            <tr>
+              <td>{{ row.spotify_track_name }}</td>
+              <td>{{ row.spotify_artists }}</td>
+              <td>{{ row.source_playlist_name }}</td>
+              <td>
+                {% for candidate in row.ambiguous_candidates %}
+                  <div><code>{{ candidate.file_path }}</code></div>
+                {% endfor %}
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="4" class="text-muted">No ambiguous tracks.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Present locally</div>
+    <div class="table-responsive">
+      <table class="table table-sm table-striped mb-0">
+        <thead><tr><th>Spotify Track</th><th>Artists</th><th>Source Playlist</th><th>Local File</th></tr></thead>
+        <tbody>
+          {% for row in gap_result.present %}
+            <tr>
+              <td>{{ row.spotify_track_name }}</td>
+              <td>{{ row.spotify_artists }}</td>
+              <td>{{ row.source_playlist_name }}</td>
+              <td><code>{{ row.local_file_path }}</code></td>
+            </tr>
+          {% else %}
+            <tr><td colspan="4" class="text-muted">No present tracks detected.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}
