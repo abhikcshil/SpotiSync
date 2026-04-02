@@ -534,6 +534,51 @@ class Database:
         ).fetchall()
         return [row["playlist_name"] for row in rows]
 
+    def get_exact_uri_matches(self, spotify_uris: List[str]) -> Dict[str, List[Dict]]:
+        if not spotify_uris:
+            return {}
+        placeholders = ", ".join("?" for _ in spotify_uris)
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                sm.spotify_uri,
+                lt.id AS local_track_id,
+                lt.file_path,
+                lt.title,
+                lt.artist,
+                lt.album,
+                lt.filename
+            FROM spotify_matches sm
+            JOIN local_tracks lt ON lt.id = sm.local_track_id
+            WHERE sm.status = 'matched' AND sm.spotify_uri IN ({placeholders})
+            """,
+            spotify_uris,
+        ).fetchall()
+        matches: Dict[str, List[Dict]] = {}
+        for row in rows:
+            key = row["spotify_uri"]
+            matches.setdefault(key, []).append(dict(row))
+        return matches
+
+    def get_local_tracks_for_gap_index(self) -> List[sqlite3.Row]:
+        return self.conn.execute(
+            """
+            SELECT
+                lt.id,
+                lt.file_path,
+                lt.filename,
+                lt.title,
+                lt.artist,
+                lt.album,
+                lt.route_playlist_name,
+                sm.spotify_uri,
+                sm.status AS match_status
+            FROM local_tracks lt
+            LEFT JOIN spotify_matches sm ON sm.local_track_id = lt.id
+            ORDER BY lt.id ASC
+            """
+        ).fetchall()
+
     def get_playlist_names(self) -> List[str]:
         rows = self.conn.execute(
             """

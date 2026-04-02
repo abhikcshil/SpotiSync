@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Dict, List, Optional
 
 import spotipy
@@ -27,6 +28,26 @@ class SpotifyClient:
         self.sp = spotipy.Spotify(auth_manager=auth_manager)
         self.market = market
         self.user_id = self.sp.current_user()["id"]
+
+    @staticmethod
+    def parse_playlist_id(value: str) -> str:
+        raw = (value or "").strip()
+        if not raw:
+            raise ValueError("Playlist value cannot be empty.")
+
+        if raw.startswith("spotify:playlist:"):
+            return raw.split(":")[-1]
+
+        match = re.search(r"playlist/([A-Za-z0-9]+)", raw)
+        if match:
+            return match.group(1)
+
+        if "?" in raw:
+            raw = raw.split("?", 1)[0]
+        if "/" not in raw and ":" not in raw:
+            return raw
+
+        raise ValueError(f"Unable to parse Spotify playlist ID from: {value}")
 
     def search_tracks(self, query: str, limit: int = 10) -> List[Dict]:
         resp = self.sp.search(q=query, type="track", limit=limit, market=self.market)
@@ -70,6 +91,28 @@ class SpotifyClient:
                 break
             offset += 100
         return uris
+
+    def get_playlist(self, playlist_id: str) -> Dict:
+        return self.sp.playlist(playlist_id, fields="id,name,external_urls.spotify")
+
+    def get_playlist_tracks(self, playlist_id: str) -> List[Dict]:
+        items: List[Dict] = []
+        offset = 0
+        while True:
+            resp = self.sp.playlist_items(
+                playlist_id,
+                limit=100,
+                offset=offset,
+                fields=(
+                    "items(added_at,is_local,track(id,uri,name,type,album(name),artists(name),external_urls.spotify)),"
+                    "next"
+                ),
+            )
+            items.extend(resp.get("items", []))
+            if not resp.get("next"):
+                break
+            offset += 100
+        return items
 
     def add_tracks_to_playlist(self, playlist_id: str, track_uris: List[str]) -> Optional[str]:
         snapshot_id = None
