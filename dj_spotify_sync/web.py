@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
 
 from .config import AppConfig
 from .db import Database
 from .jobs import job_manager
-from .services import get_sync_target_playlists, run_check_query, run_scan, run_sync
+from .services import get_sync_target_playlists, run_check_query, run_reconcile, run_scan, run_sync
 
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -23,13 +24,30 @@ def _with_db() -> tuple[AppConfig, Database]:
     return config, Database(config.db_path)
 
 
+@app.template_filter("pretty_json")
+def pretty_json(value):
+    if not value:
+        return ""
+    try:
+        return json.dumps(json.loads(value), indent=2)
+    except Exception:
+        return value
+
+
 @app.route("/")
 def dashboard():
     config, db = _with_db()
     try:
         stats = db.get_dashboard_stats()
         recent_activity = [dict(row) for row in db.get_recent_sync_activity(limit=15)]
-        return render_template("dashboard.html", stats=stats, recent_activity=recent_activity, config=config)
+        activity_feed = [dict(row) for row in db.get_activity_logs(limit=10)]
+        return render_template(
+            "dashboard.html",
+            stats=stats,
+            recent_activity=recent_activity,
+            activity_feed=activity_feed,
+            config=config,
+        )
     finally:
         db.close()
 
@@ -52,6 +70,7 @@ def scan_page():
                 progress_callback=lambda current, total, message, extra=None: job_manager.update_progress(
                     job.job_id, current=current, total=total, message=message, extra=extra
                 ),
+                job_id=job.job_id,
             )
 
         job_manager.start_job(job, _run_scan_job)
@@ -100,6 +119,7 @@ def sync_page():
                 progress_callback=lambda current, total, message, extra=None: job_manager.update_progress(
                     job.job_id, current=current, total=total, message=message, extra=extra
                 ),
+                job_id=job.job_id,
             )
 
         job_manager.start_job(job, _run_sync_job)
@@ -107,6 +127,64 @@ def sync_page():
 
     return render_template(
         "sync.html",
+        limit=raw_limit,
+        since=raw_since,
+        recent_limit=raw_recent_limit,
+        playlist_options=playlist_options,
+        selected_playlists=selected_playlists,
+    )
+
+
+@app.route("/reconcile", methods=["GET", "POST"])
+def reconcile_page():
+    playlist_options = get_sync_target_playlists()
+
+    selected_playlists: list[str] = []
+    raw_limit = ""
+    raw_since = ""
+    raw_recent_limit = ""
+
+    if request.method == "POST":
+        selected_playlists = [value.strip() for value in request.form.getlist("genres") if value.strip()]
+        raw_limit = request.form.get("limit", "").strip()
+        raw_since = request.form.get("since", "").strip()
+        raw_recent_limit = request.form.get("recent_limit", "").strip()
+        mode = request.form.get("mode", "preview")
+
+        try:
+            limit = int(raw_limit) if raw_limit else None
+            recent_limit = int(raw_recent_limit) if raw_recent_limit else None
+        except ValueError:
+            flash("Limit and recent limit must be valid integers.", "danger")
+            return render_template(
+                "reconcile.html",
+                limit=raw_limit,
+                since=raw_since,
+                recent_limit=raw_recent_limit,
+                playlist_options=playlist_options,
+                selected_playlists=selected_playlists,
+            )
+
+        job = job_manager.create_job("reconcile")
+
+        def _run_reconcile_job() -> dict:
+            return run_reconcile(
+                apply_changes=(mode == "apply"),
+                target_playlists=selected_playlists,
+                since=raw_since or None,
+                recent_limit=recent_limit,
+                limit=limit,
+                progress_callback=lambda current, total, message, extra=None: job_manager.update_progress(
+                    job.job_id, current=current, total=total, message=message, extra=extra
+                ),
+                job_id=job.job_id,
+            )
+
+        job_manager.start_job(job, _run_reconcile_job)
+        return redirect(url_for("job_page", job_id=job.job_id))
+
+    return render_template(
+        "reconcile.html",
         limit=raw_limit,
         since=raw_since,
         recent_limit=raw_recent_limit,
@@ -151,6 +229,26 @@ def check_page():
                 flash(f"Check failed: {exc}", "danger")
 
     return render_template("check.html", rows=rows, query=query, local_match_count=local_match_count)
+
+
+@app.route("/activity")
+def activity_page():
+    _, db = _with_db()
+    try:
+        source = request.args.get("source", "all")
+        status = request.args.get("status", "all")
+        logs = [dict(row) for row in db.get_activity_logs(limit=300, source=source, status=status)]
+        sync_logs = [dict(row) for row in db.get_recent_sync_activity(limit=100)]
+        return render_template(
+            "activity.html",
+            logs=logs,
+            sync_logs=sync_logs,
+            filters={"source": source, "status": status},
+            sources=db.get_activity_sources(),
+            statuses=db.get_activity_statuses(),
+        )
+    finally:
+        db.close()
 
 
 @app.route("/library")

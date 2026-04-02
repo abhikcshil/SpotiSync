@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -62,6 +63,17 @@ class Database:
                 message TEXT,
                 synced_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(local_track_id) REFERENCES local_tracks(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS activity_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                event_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                source TEXT NOT NULL,
+                job_id TEXT,
+                summary TEXT NOT NULL,
+                detail_json TEXT
             );
             """
         )
@@ -223,6 +235,39 @@ class Database:
 
         return self.conn.execute(query, params).fetchall()
 
+    def get_reconciliation_candidates(
+        self,
+        target_playlists: Optional[List[str]] = None,
+        since: Optional[str] = None,
+        recent_limit: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> List[sqlite3.Row]:
+        clauses, params = self._build_track_filter_clauses(target_playlists=target_playlists, since=since)
+        clauses.append("sm.status = 'matched'")
+        clauses.append("sm.spotify_uri IS NOT NULL")
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+        query = (
+            "SELECT lt.id, lt.title, lt.artist, lt.filename, lt.route_playlist_name, "
+            "sm.spotify_uri, p.spotify_playlist_id AS desired_playlist_id "
+            "FROM local_tracks lt "
+            "JOIN spotify_matches sm ON sm.local_track_id = lt.id "
+            "LEFT JOIN playlists p ON p.playlist_name = COALESCE(NULLIF(lt.route_playlist_name, ''), 'Unsorted') "
+            f"{where_sql} "
+        )
+
+        if recent_limit:
+            query += "ORDER BY lt.last_scanned_at DESC, lt.id DESC "
+        else:
+            query += "ORDER BY lt.id ASC "
+
+        effective_limit = self._effective_limit(limit, recent_limit)
+        if effective_limit:
+            query += "LIMIT ?"
+            params.append(effective_limit)
+
+        return self.conn.execute(query, params).fetchall()
+
     def upsert_playlist(self, playlist_name: str, spotify_playlist_id: str, snapshot_id: Optional[str]) -> None:
         self.conn.execute(
             """
@@ -242,6 +287,11 @@ class Database:
             "SELECT * FROM playlists WHERE playlist_name = ?", (playlist_name,)
         ).fetchone()
 
+    def get_managed_playlists(self) -> List[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT playlist_name, spotify_playlist_id FROM playlists ORDER BY playlist_name"
+        ).fetchall()
+
     def add_sync_history(self, payload: Dict) -> None:
         self.conn.execute(
             """
@@ -257,6 +307,65 @@ class Database:
             ),
         )
         self.conn.commit()
+
+    def add_activity_log(
+        self,
+        event_type: str,
+        status: str,
+        source: str,
+        summary: str,
+        detail: Optional[Dict] = None,
+        job_id: Optional[str] = None,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO activity_log (event_type, status, source, job_id, summary, detail_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (event_type, status, source, job_id, summary, json.dumps(detail) if detail else None),
+        )
+        self.conn.commit()
+
+    def get_activity_logs(
+        self,
+        limit: int = 200,
+        source: Optional[str] = None,
+        status: Optional[str] = None,
+        job_id: Optional[str] = None,
+    ) -> List[sqlite3.Row]:
+        clauses: List[str] = []
+        params: List = []
+
+        if source and source != "all":
+            clauses.append("source = ?")
+            params.append(source)
+        if status and status != "all":
+            clauses.append("status = ?")
+            params.append(status)
+        if job_id:
+            clauses.append("job_id = ?")
+            params.append(job_id)
+
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        return self.conn.execute(
+            f"""
+            SELECT *
+            FROM activity_log
+            {where_sql}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+
+    def get_activity_sources(self) -> List[str]:
+        rows = self.conn.execute("SELECT DISTINCT source FROM activity_log ORDER BY source").fetchall()
+        return [row["source"] for row in rows]
+
+    def get_activity_statuses(self) -> List[str]:
+        rows = self.conn.execute("SELECT DISTINCT status FROM activity_log ORDER BY status").fetchall()
+        return [row["status"] for row in rows]
 
     def check_track(self, query_text: str, limit: int = 10) -> List[sqlite3.Row]:
         like = f"%{query_text}%"

@@ -5,7 +5,7 @@ import argparse
 from .checker import run_check
 from .config import AppConfig
 from .db import Database
-from .services import run_scan, run_sync
+from .services import run_reconcile, run_scan, run_sync
 from .spotify_client import SpotifyClient
 
 
@@ -60,6 +60,27 @@ def cmd_sync(args) -> None:
     )
 
 
+def cmd_reconcile(args) -> None:
+    summary = run_reconcile(
+        apply_changes=args.apply,
+        target_playlists=args.genre,
+        since=args.since,
+        recent_limit=args.recent_limit,
+        limit=args.limit,
+    )
+    counts = summary["counts"]
+    print(
+        f"Reconcile {summary['mode']} complete. "
+        f"candidates={summary['candidate_count']} managed_playlists={summary['managed_playlist_count']}"
+    )
+    print(
+        "Results: "
+        f"already_correct={counts['already_correct']} missing_from_desired={counts['missing_from_desired']} "
+        f"planned_adds={counts['planned_adds']} planned_removes={counts['planned_removes']} "
+        f"applied_adds={counts['applied_adds']} applied_removes={counts['applied_removes']} failed={counts['failed']}"
+    )
+
+
 def cmd_check(args) -> None:
     config = AppConfig()
     db = Database(config.db_path)
@@ -101,6 +122,25 @@ def main() -> None:
         help="Most recent N eligible tracks by last scanned timestamp.",
     )
     sync.set_defaults(func=cmd_sync)
+
+    reconcile = sub.add_parser("reconcile", help="Preview or apply playlist reconciliation for managed playlists")
+    mode = reconcile.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="Preview reconciliation actions (default mode)")
+    mode.add_argument("--apply", action="store_true", help="Apply reconciliation actions")
+    reconcile.add_argument(
+        "--genre",
+        action="append",
+        default=None,
+        help="Filter by routed target playlist/genre bucket. Repeat or comma-separate values.",
+    )
+    reconcile.add_argument(
+        "--since",
+        default=None,
+        help="Only include tracks scanned at/after this value (YYYY-MM-DD or YYYY-MM-DDTHH:MM[:SS]).",
+    )
+    reconcile.add_argument("--recent-limit", type=int, default=None, help="Most recent N eligible tracks.")
+    reconcile.add_argument("--limit", type=int, default=None, help="Optional hard cap of tracks to reconcile.")
+    reconcile.set_defaults(func=cmd_reconcile)
 
     check = sub.add_parser("check", help="Check whether track exists locally and synced state")
     check.add_argument("query", help="Query string (title, artist, or filename)")

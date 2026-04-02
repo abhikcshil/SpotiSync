@@ -1,0 +1,31 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Smart playlist reconciliation</h1>
+<p class="text-muted">Preview first, then explicitly apply corrections only for app-managed playlists and matched Spotify URIs.</p>
+<form method="post" class="row g-3 align-items-end mb-4">
+  <div class="col-md-4">
+    <label class="form-label">Target playlist(s) / genre bucket(s)</label>
+    <select class="form-select" name="genres" multiple size="6">
+      {% for playlist in playlist_options %}
+      <option value="{{ playlist }}" {% if playlist in selected_playlists %}selected{% endif %}>{{ playlist }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-2">
+    <label class="form-label">Since (optional)</label>
+    <input class="form-control" name="since" type="date" value="{{ since }}">
+  </div>
+  <div class="col-md-2">
+    <label class="form-label">Most recent N</label>
+    <input class="form-control" name="recent_limit" type="number" min="1" value="{{ recent_limit }}">
+  </div>
+  <div class="col-md-2">
+    <label class="form-label">Hard limit</label>
+    <input class="form-control" name="limit" type="number" min="1" value="{{ limit }}">
+  </div>
+  <div class="col-md-2 d-grid gap-2">
+    <button class="btn btn-outline-primary" type="submit" name="mode" value="preview">Preview reconciliation</button>
+    <button class="btn btn-warning" type="submit" name="mode" value="apply">Apply reconciliation</button>
+  </div>
+</form>
+{% endblock %}
