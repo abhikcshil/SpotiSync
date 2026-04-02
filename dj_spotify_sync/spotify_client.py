@@ -78,3 +78,11 @@ class SpotifyClient:
             resp = self.sp.playlist_add_items(playlist_id, batch)
             snapshot_id = resp.get("snapshot_id", snapshot_id)
         return snapshot_id
+
+    def remove_tracks_from_playlist(self, playlist_id: str, track_uris: List[str]) -> Optional[str]:
+        snapshot_id = None
+        for i in range(0, len(track_uris), 100):
+            batch = track_uris[i : i + 100]
+            resp = self.sp.playlist_remove_all_occurrences_of_items(playlist_id, batch)
+            snapshot_id = resp.get("snapshot_id", snapshot_id)
+        return snapshot_id

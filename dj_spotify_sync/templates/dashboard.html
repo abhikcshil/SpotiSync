@@ -12,9 +12,28 @@
 <div class="mb-4 d-flex gap-2 flex-wrap">
   <a class="btn btn-primary" href="{{ url_for('scan_page') }}">Start scan</a>
   <a class="btn btn-success" href="{{ url_for('sync_page') }}">Start sync</a>
+  <a class="btn btn-warning" href="{{ url_for('reconcile_page') }}">Reconcile</a>
   <a class="btn btn-info" href="{{ url_for('check_page') }}">Search/check song</a>
-  <a class="btn btn-warning" href="{{ url_for('unresolved_page') }}">View unresolved</a>
-  <a class="btn btn-secondary" href="{{ url_for('playlists_page') }}">View playlists/routing</a>
+  <a class="btn btn-secondary" href="{{ url_for('activity_page') }}">Activity & Logs</a>
+</div>
+
+<h2 class="h4">Recent activity feed</h2>
+<div class="table-responsive mb-4">
+<table class="table table-sm table-striped">
+  <thead><tr><th>Time</th><th>Source</th><th>Status</th><th>Summary</th></tr></thead>
+  <tbody>
+    {% for row in activity_feed %}
+      <tr>
+        <td>{{ row.created_at }}</td>
+        <td>{{ row.source }}</td>
+        <td><span class="badge bg-{% if row.status == 'completed' %}success{% elif row.status == 'failed' %}danger{% elif row.status == 'started' %}primary{% else %}secondary{% endif %}">{{ row.status }}</span></td>
+        <td>{{ row.summary }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="text-muted">No activity events yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
 </div>
 
 <h2 class="h4">Recent sync activity</h2>

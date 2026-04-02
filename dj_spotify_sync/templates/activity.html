@@ -1,0 +1,58 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Activity feed & shell logs</h1>
+<form method="get" class="row g-2 mb-3">
+  <div class="col-md-3">
+    <label class="form-label">Source</label>
+    <select class="form-select" name="source">
+      <option value="all">All</option>
+      {% for source in sources %}
+      <option value="{{ source }}" {% if filters.source == source %}selected{% endif %}>{{ source }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-3">
+    <label class="form-label">Status</label>
+    <select class="form-select" name="status">
+      <option value="all">All</option>
+      {% for status in statuses %}
+      <option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-2 d-flex align-items-end">
+    <button class="btn btn-primary" type="submit">Filter</button>
+  </div>
+</form>
+
+<h2 class="h4">Activity events</h2>
+<div class="table-responsive mb-4">
+<table class="table table-sm table-striped">
+  <thead><tr><th>Time</th><th>Source</th><th>Type</th><th>Status</th><th>Summary</th><th>Job</th></tr></thead>
+  <tbody>
+    {% for row in logs %}
+    <tr>
+      <td>{{ row.created_at }}</td>
+      <td>{{ row.source }}</td>
+      <td>{{ row.event_type }}</td>
+      <td><span class="badge bg-{% if row.status == 'completed' %}success{% elif row.status == 'failed' %}danger{% elif row.status == 'started' %}primary{% else %}secondary{% endif %}">{{ row.status }}</span></td>
+      <td>{{ row.summary }}</td>
+      <td><code>{{ row.job_id or '-' }}</code></td>
+    </tr>
+    {% if row.detail_json %}
+    <tr><td colspan="6"><pre class="log-box mb-0">{{ row.detail_json | pretty_json }}</pre></td></tr>
+    {% endif %}
+    {% else %}
+    <tr><td colspan="6" class="text-muted">No activity logs yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2 class="h4">Operational shell/log view (recent sync actions)</h2>
+<pre class="log-box">{% for row in sync_logs %}[{{ row.synced_at }}] {{ row.status|upper }} :: {{ row.playlist_name or '-' }} :: {{ row.artist or 'Unknown' }} - {{ row.title or row.filename }} :: {{ row.message or '-' }}
+{% else %}No sync/reconcile line items available yet.
+{% endfor %}</pre>
+
+<script>setTimeout(() => window.location.reload(), 15000);</script>
+{% endblock %}
