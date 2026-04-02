@@ -10,6 +10,7 @@ from rapidfuzz import fuzz
 
 from .config import AppConfig, ensure_default_genre_map
 from .db import Database
+from .fingerprint import FingerprintMatcher
 from .matcher import SpotifyMatcher
 from .scanner import GenreRouter, MusicScanner
 from .spotify_client import SpotifyClient
@@ -192,6 +193,7 @@ def run_sync(
     target_playlists: Optional[Iterable[str]] = None,
     since: Optional[str] = None,
     recent_limit: Optional[int] = None,
+    use_fingerprint: bool = False,
     config: Optional[AppConfig] = None,
     progress_callback: Optional[ProgressCallback] = None,
     job_id: Optional[str] = None,
@@ -215,6 +217,7 @@ def run_sync(
                 "since": normalized_since,
                 "recent_limit": recent_limit,
                 "limit": limit,
+                "use_fingerprint": use_fingerprint,
             }
         },
         job_id=job_id,
@@ -238,7 +241,15 @@ def run_sync(
         market=cfg.market,
     )
 
-    matcher = SpotifyMatcher(spotify_client=spotify, threshold=cfg.match_threshold)
+    fingerprint_matcher = FingerprintMatcher(db=db, acoustid_api_key=cfg.acoustid_api_key) if use_fingerprint else None
+    matcher = SpotifyMatcher(
+        spotify_client=spotify,
+        threshold=cfg.match_threshold,
+        strong_match_threshold=cfg.strong_match_threshold,
+        fingerprint_matcher=fingerprint_matcher,
+        fingerprint_min_confidence=cfg.fingerprint_min_confidence,
+        fingerprint_combined_threshold=cfg.fingerprint_combined_threshold,
+    )
     candidates = db.get_tracks_for_matching(
         limit=limit,
         target_playlists=normalized_playlists,
@@ -249,6 +260,9 @@ def run_sync(
 
     matched = unresolved = errors = 0
     match_errors: List[str] = []
+    fingerprint_attempted = 0
+    fingerprint_matched = 0
+    fingerprint_failed = 0
 
     if progress_callback:
         progress_callback(0, None, "Preparing sync candidates...", {"phase": "preparing"})
@@ -263,16 +277,40 @@ def run_sync(
                     {"phase": "matching_tracks"},
                 )
 
-            result = matcher.match_track(dict(row))
+            result = matcher.match_track(
+                dict(row),
+                use_fingerprint=use_fingerprint,
+                fingerprint_progress=(
+                    lambda msg: progress_callback(
+                        idx - 1,
+                        candidate_total,
+                        f"{msg} ({idx}/{candidate_total})",
+                        {"phase": "fingerprint_matching"},
+                    )
+                    if progress_callback
+                    else None
+                ),
+            )
             payload = {
                 "local_track_id": row["id"],
                 "spotify_uri": result.get("spotify_uri"),
                 "spotify_track_name": result.get("spotify_track_name"),
                 "spotify_artists": result.get("spotify_artists"),
                 "confidence_score": result.get("confidence_score"),
+                "match_source": result.get("match_source") or "metadata",
+                "fingerprint_confidence": result.get("fingerprint_confidence"),
+                "acoustid_id": result.get("acoustid_id"),
+                "recording_id": result.get("recording_id"),
                 "status": result["status"],
             }
             db.upsert_spotify_match(payload)
+
+            if result.get("fingerprint_attempted"):
+                fingerprint_attempted += 1
+                if result["status"] == "matched" and result.get("match_source") == "fingerprint":
+                    fingerprint_matched += 1
+                elif result.get("fingerprint_status") in {"unresolved", "error"}:
+                    fingerprint_failed += 1
 
             if result["status"] == "matched":
                 matched += 1
@@ -329,13 +367,33 @@ def run_sync(
             "skipped": sync_summary["skipped"],
             "failed": sync_summary["failed"],
             "messages": match_errors,
+            "fingerprint": {
+                "enabled": use_fingerprint,
+                "attempted": fingerprint_attempted,
+                "matched": fingerprint_matched,
+                "failed": fingerprint_failed,
+            },
             "filters": {
                 "target_playlists": normalized_playlists,
                 "since": normalized_since,
                 "recent_limit": recent_limit,
                 "limit": limit,
+                "use_fingerprint": use_fingerprint,
             },
         }
+        if use_fingerprint:
+            _log_activity(
+                db,
+                source="sync",
+                event_type="sync_fingerprint_summary",
+                status="completed",
+                summary=(
+                    f"Fingerprint fallback attempted for {fingerprint_attempted} track(s); "
+                    f"matched={fingerprint_matched}, failed={fingerprint_failed}"
+                ),
+                detail=summary["fingerprint"],
+                job_id=job_id,
+            )
         _log_activity(
             db,
             source="sync",

@@ -40,10 +40,27 @@ class Database:
                 spotify_track_name TEXT,
                 spotify_artists TEXT,
                 confidence_score REAL,
+                match_source TEXT DEFAULT 'metadata',
+                fingerprint_confidence REAL,
+                acoustid_id TEXT,
+                recording_id TEXT,
                 status TEXT NOT NULL,
                 matched_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(local_track_id),
                 FOREIGN KEY(local_track_id) REFERENCES local_tracks(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS fingerprint_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT UNIQUE NOT NULL,
+                modified_time REAL NOT NULL,
+                acoustid_id TEXT,
+                recording_id TEXT,
+                title TEXT,
+                artist TEXT,
+                confidence_score REAL,
+                error_message TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS playlists (
@@ -77,7 +94,20 @@ class Database:
             );
             """
         )
+        self._migrate_schema()
         self.conn.commit()
+
+    def _migrate_schema(self) -> None:
+        self._ensure_column("spotify_matches", "match_source", "TEXT DEFAULT 'metadata'")
+        self._ensure_column("spotify_matches", "fingerprint_confidence", "REAL")
+        self._ensure_column("spotify_matches", "acoustid_id", "TEXT")
+        self._ensure_column("spotify_matches", "recording_id", "TEXT")
+
+    def _ensure_column(self, table: str, column: str, column_sql: str) -> None:
+        rows = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        columns = {row["name"] for row in rows}
+        if column not in columns:
+            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_sql}")
 
     def upsert_local_track(self, track: Dict) -> int:
         cur = self.conn.cursor()
@@ -188,13 +218,17 @@ class Database:
             """
             INSERT INTO spotify_matches (
                 local_track_id, spotify_uri, spotify_track_name, spotify_artists,
-                confidence_score, status, matched_at
-            ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                confidence_score, match_source, fingerprint_confidence, acoustid_id, recording_id, status, matched_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(local_track_id) DO UPDATE SET
                 spotify_uri=excluded.spotify_uri,
                 spotify_track_name=excluded.spotify_track_name,
                 spotify_artists=excluded.spotify_artists,
                 confidence_score=excluded.confidence_score,
+                match_source=excluded.match_source,
+                fingerprint_confidence=excluded.fingerprint_confidence,
+                acoustid_id=excluded.acoustid_id,
+                recording_id=excluded.recording_id,
                 status=excluded.status,
                 matched_at=CURRENT_TIMESTAMP
             """,
@@ -204,7 +238,52 @@ class Database:
                 payload.get("spotify_track_name"),
                 payload.get("spotify_artists"),
                 payload.get("confidence_score"),
+                payload.get("match_source") or "metadata",
+                payload.get("fingerprint_confidence"),
+                payload.get("acoustid_id"),
+                payload.get("recording_id"),
                 payload["status"],
+            ),
+        )
+        self.conn.commit()
+
+    def get_fingerprint_cache(self, file_path: str, modified_time: Optional[float]) -> Optional[sqlite3.Row]:
+        if not file_path or modified_time is None:
+            return None
+        return self.conn.execute(
+            """
+            SELECT *
+            FROM fingerprint_cache
+            WHERE file_path = ? AND modified_time = ?
+            """,
+            (file_path, modified_time),
+        ).fetchone()
+
+    def upsert_fingerprint_cache(self, payload: Dict) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO fingerprint_cache (
+                file_path, modified_time, acoustid_id, recording_id, title, artist, confidence_score, error_message, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(file_path) DO UPDATE SET
+                modified_time=excluded.modified_time,
+                acoustid_id=excluded.acoustid_id,
+                recording_id=excluded.recording_id,
+                title=excluded.title,
+                artist=excluded.artist,
+                confidence_score=excluded.confidence_score,
+                error_message=excluded.error_message,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (
+                payload["file_path"],
+                payload.get("modified_time"),
+                payload.get("acoustid_id"),
+                payload.get("recording_id"),
+                payload.get("title"),
+                payload.get("artist"),
+                payload.get("confidence_score"),
+                payload.get("error_message"),
             ),
         )
         self.conn.commit()
@@ -377,6 +456,7 @@ class Database:
                 sm.spotify_track_name,
                 sm.spotify_artists,
                 sm.status as match_status,
+                sm.match_source,
                 CASE WHEN EXISTS (
                     SELECT 1 FROM sync_history sh
                     WHERE sh.local_track_id = lt.id AND sh.status = 'added'
@@ -468,6 +548,7 @@ class Database:
             SELECT
                 lt.*,
                 sm.status AS match_status,
+                sm.match_source,
                 sm.spotify_uri,
                 sm.spotify_track_name,
                 sm.spotify_artists,

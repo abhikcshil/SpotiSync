@@ -96,12 +96,14 @@ def sync_page():
     raw_limit = ""
     raw_since = ""
     raw_recent_limit = ""
+    use_fingerprint = _get_config().use_fingerprint_default
 
     if request.method == "POST":
         selected_playlists = [value.strip() for value in request.form.getlist("genres") if value.strip()]
         raw_limit = request.form.get("limit", "").strip()
         raw_since = request.form.get("since", "").strip()
         raw_recent_limit = request.form.get("recent_limit", "").strip()
+        use_fingerprint = request.form.get("use_fingerprint") == "on"
 
         try:
             limit = int(raw_limit) if raw_limit else None
@@ -113,6 +115,7 @@ def sync_page():
                 limit=raw_limit,
                 since=raw_since,
                 recent_limit=raw_recent_limit,
+                use_fingerprint=use_fingerprint,
                 playlist_options=playlist_options,
                 selected_playlists=selected_playlists,
             )
@@ -125,6 +128,7 @@ def sync_page():
                 target_playlists=selected_playlists,
                 since=raw_since or None,
                 recent_limit=recent_limit,
+                use_fingerprint=use_fingerprint,
                 progress_callback=lambda current, total, message, extra=None: job_manager.update_progress(
                     job.job_id, current=current, total=total, message=message, extra=extra
                 ),
@@ -139,6 +143,7 @@ def sync_page():
         limit=raw_limit,
         since=raw_since,
         recent_limit=raw_recent_limit,
+        use_fingerprint=use_fingerprint,
         playlist_options=playlist_options,
         selected_playlists=selected_playlists,
     )

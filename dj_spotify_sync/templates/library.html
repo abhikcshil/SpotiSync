@@ -30,7 +30,7 @@
 
 <div class="table-responsive">
 <table class="table table-striped table-sm">
-  <thead><tr><th>Title</th><th>Artist</th><th>Genre</th><th>Path</th><th>Target playlist</th><th>Match</th><th>Synced</th></tr></thead>
+  <thead><tr><th>Title</th><th>Artist</th><th>Genre</th><th>Path</th><th>Target playlist</th><th>Match</th><th>Source</th><th>Synced</th></tr></thead>
   <tbody>
   {% for row in tracks %}
     <tr>
@@ -40,10 +40,11 @@
       <td class="small">{{ row.file_path }}</td>
       <td>{{ row.route_playlist_name or 'Unsorted' }}</td>
       <td><span class="badge bg-{% if row.match_status == 'matched' %}success{% elif row.match_status == 'unresolved' %}warning{% else %}secondary{% endif %}">{{ row.match_status or 'not-matched' }}</span></td>
+      <td><span class="badge bg-info text-dark">{{ row.match_source or '-' }}</span></td>
       <td><span class="badge bg-{% if row.is_synced %}success{% else %}secondary{% endif %}">{% if row.is_synced %}yes{% else %}no{% endif %}</span></td>
     </tr>
   {% else %}
-    <tr><td colspan="7" class="text-muted">No tracks found.</td></tr>
+    <tr><td colspan="8" class="text-muted">No tracks found.</td></tr>
   {% endfor %}
   </tbody>
 </table>
