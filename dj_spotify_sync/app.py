@@ -42,6 +42,7 @@ def cmd_sync(args) -> None:
         target_playlists=args.genre,
         since=args.since,
         recent_limit=args.recent_limit,
+        use_fingerprint=args.use_fingerprint,
     )
     active_filters = summary.get("filters", {})
     if any(active_filters.values()):
@@ -58,6 +59,12 @@ def cmd_sync(args) -> None:
         f"matched={summary['matched']}, unresolved={summary['unresolved']}, errors={summary['errors']}, "
         f"added={summary['added']}, skipped={summary['skipped']}, failed={summary['failed']}"
     )
+    fp = summary.get("fingerprint") or {}
+    if fp.get("enabled"):
+        print(
+            "Fingerprint fallback: "
+            f"attempted={fp.get('attempted', 0)}, matched={fp.get('matched', 0)}, failed={fp.get('failed', 0)}"
+        )
 
 
 def cmd_reconcile(args) -> None:
@@ -136,6 +143,11 @@ def main() -> None:
         type=int,
         default=None,
         help="Most recent N eligible tracks by last scanned timestamp.",
+    )
+    sync.add_argument(
+        "--use-fingerprint",
+        action="store_true",
+        help="Enable advanced fingerprint fallback matching (AcoustID/Chromaprint).",
     )
     sync.set_defaults(func=cmd_sync)
 

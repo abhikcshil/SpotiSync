@@ -21,6 +21,18 @@ class AppConfig:
         self.spotify_redirect_uri = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback")
         self.spotify_username = os.getenv("SPOTIFY_USERNAME", "")
         self.match_threshold = float(os.getenv("DJ_SYNC_MATCH_THRESHOLD", "70"))
+        self.strong_match_threshold = float(os.getenv("DJ_SYNC_STRONG_MATCH_THRESHOLD", "78"))
+        self.use_fingerprint_default = os.getenv("DJ_SYNC_USE_FINGERPRINT_DEFAULT", "1").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        self.acoustid_api_key = os.getenv("ACOUSTID_API_KEY", "")
+        self.fingerprint_min_confidence = float(os.getenv("DJ_SYNC_FINGERPRINT_MIN_CONFIDENCE", "0.55"))
+        self.fingerprint_combined_threshold = float(
+            os.getenv("DJ_SYNC_FINGERPRINT_COMBINED_THRESHOLD", str(self.match_threshold))
+        )
         self.unsorted_playlist_name = os.getenv("DJ_SYNC_UNSORTED_PLAYLIST", "Unsorted")
         self.market = os.getenv("SPOTIFY_MARKET", "US")
 

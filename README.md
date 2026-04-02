@@ -8,7 +8,8 @@ This app **does not upload local files to Spotify**. It scans local music files,
 
 - `scanner.py`: Recursively scans folders (`.mp3`, `.flac`, `.m4a`, `.wav`), reads metadata with `mutagen`, falls back to filename inference.
 - `db.py`: Initializes and manages SQLite tables (`local_tracks`, `spotify_matches`, `playlists`, `sync_history`).
-- `matcher.py`: Searches Spotify catalog and scores candidates (title, artist, duration, mismatch keyword penalties).
+- `matcher.py`: Searches Spotify catalog and scores candidates (title, artist, duration, mismatch keyword penalties) with optional fingerprint fallback.
+- `fingerprint.py`: Optional AcoustID/Chromaprint lookup + SQLite cache for unchanged files.
 - `syncer.py`: Creates/finds Spotify playlists, avoids duplicate track adds, batches additions, writes sync logs.
 - `checker.py`: Query utility to see local presence, Spotify match status, playlist route, sync state.
 - `app.py`: CLI entrypoint (`scan`, `sync`, `check`).
@@ -48,6 +49,10 @@ This app **does not upload local files to Spotify**. It scans local music files,
    ```powershell
    pip install -r requirements.txt
    ```
+   For fingerprint fallback install Chromaprint binary (`fpcalc`) as well:
+   - macOS: `brew install chromaprint`
+   - Ubuntu/Debian: `sudo apt-get install chromaprint`
+   - Windows: install Chromaprint and ensure `fpcalc.exe` is on PATH.
 
 3. **Configure environment variables**:
    ```powershell
@@ -58,6 +63,8 @@ This app **does not upload local files to Spotify**. It scans local music files,
    - `SPOTIFY_CLIENT_SECRET`
    - `SPOTIFY_REDIRECT_URI`
    - `SPOTIFY_USERNAME`
+   Optional for Stage 4 advanced matching:
+   - `ACOUSTID_API_KEY` (from https://acoustid.org/new-application)
 
 4. **Create Spotify app**:
    - Go to Spotify Developer Dashboard.
@@ -80,6 +87,11 @@ python -m dj_spotify_sync.app sync
 Optional limited run:
 ```bash
 python -m dj_spotify_sync.app sync --limit 200
+```
+Enable advanced fingerprint fallback:
+```bash
+python -m dj_spotify_sync.app sync --use-fingerprint
+python -m dj_spotify_sync.app sync --genre "House" --use-fingerprint
 ```
 
 ### 3) Check if a song exists/matched/synced
@@ -123,10 +135,18 @@ Scoring combines:
 
 If score is below `DJ_SYNC_MATCH_THRESHOLD` (default `70`), track is marked **unresolved**.
 
+When `--use-fingerprint` (CLI) or **Use advanced matching** (GUI) is enabled:
+- metadata match runs first
+- unresolved / low-confidence results trigger AcoustID fallback
+- fingerprint candidates are remapped to Spotify using the same scoring pipeline
+- final source is stored as `metadata` or `fingerprint`
+- failures (missing API key, unsupported file, network errors) are skipped safely without breaking sync
+
 ## SQLite tables
 
 - `local_tracks`: scan results and route target playlist
-- `spotify_matches`: match URI/name/artists/confidence/status
+- `spotify_matches`: match URI/name/artists/confidence/status + source (`metadata`/`fingerprint`) and fingerprint metadata
+- `fingerprint_cache`: cached AcoustID results keyed by file path + modified time
 - `playlists`: resolved Spotify playlist IDs
 - `sync_history`: added/skipped/failed events
 
@@ -138,7 +158,7 @@ If score is below `DJ_SYNC_MATCH_THRESHOLD` (default `70`), track is marked **un
 
 ## Known limitations / future improvements
 
-- No acoustic fingerprinting (metadata-based matching only).
+- Fingerprint fallback depends on optional `pyacoustid` + Chromaprint (`fpcalc`) + `ACOUSTID_API_KEY`.
 - Basic keyword routing; could be improved with multi-tag logic.
 - Sync currently re-checks playlist tracks each run (can be optimized with caching).
 - Manual overrides currently support `contains`/`equals` only.

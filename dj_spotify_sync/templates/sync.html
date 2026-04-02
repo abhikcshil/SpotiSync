@@ -26,6 +26,15 @@
   <div class="col-md-2">
     <button class="btn btn-success" type="submit">Start sync</button>
   </div>
+  <div class="col-12">
+    <div class="form-check">
+      <input class="form-check-input" type="checkbox" name="use_fingerprint" id="useFingerprint" {% if use_fingerprint %}checked{% endif %}>
+      <label class="form-check-label" for="useFingerprint">
+        Use advanced matching (fingerprint fallback)
+      </label>
+    </div>
+    <div class="form-text">Uses AcoustID/Chromaprint only for unresolved or low-confidence metadata matches.</div>
+  </div>
 </form>
 <p class="text-muted">Sync jobs run in the background with live status updates. Filters apply before matching and playlist add steps.</p>
 {% endblock %}
