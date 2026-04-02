@@ -5,7 +5,7 @@ import argparse
 from .checker import run_check
 from .config import AppConfig
 from .db import Database
-from .services import build_download_queue_csv, run_gap_detection, run_reconcile, run_scan, run_sync
+from .services import build_download_queue_csv, run_gap_detection, run_reconcile, run_scan_workflow, run_sync
 from .spotify_client import SpotifyClient
 
 
@@ -30,10 +30,38 @@ def build_spotify_client(config: AppConfig) -> SpotifyClient:
 
 
 def cmd_scan(args) -> None:
-    summary = run_scan(args.folders)
+    workflow_result = run_scan_workflow(
+        args.folders,
+        auto_sync=args.auto_sync,
+        dj_mode=args.dj_mode,
+        use_fingerprint=(True if args.use_fingerprint else None),
+        recent_limit=args.recent_limit,
+        auto_reconcile_preview=args.auto_reconcile_preview,
+        target_playlists=args.genre,
+        limit=args.limit,
+    )
+    summary = workflow_result["scan"]
     for warning in summary["warnings"]:
         print(f"[WARN] {warning}")
     print(f"Scan complete. Processed {summary['processed']} tracks, saved {summary['saved']} records.")
+
+    if workflow_result.get("sync"):
+        sync_summary = workflow_result["sync"]
+        print(
+            "Auto-sync complete. "
+            f"matched={sync_summary['matched']}, unresolved={sync_summary['unresolved']}, "
+            f"errors={sync_summary['errors']}, added={sync_summary['added']}, "
+            f"skipped={sync_summary['skipped']}, failed={sync_summary['failed']}"
+        )
+
+    if workflow_result.get("reconcile_preview"):
+        reconcile_summary = workflow_result["reconcile_preview"]
+        counts = reconcile_summary["counts"]
+        print(
+            "DJ preview reconciliation complete. "
+            f"planned_adds={counts['planned_adds']}, planned_removes={counts['planned_removes']}, "
+            f"unmanaged_destination={counts['unmanaged_destination']}"
+        )
 
 
 def cmd_sync(args) -> None:
@@ -123,6 +151,18 @@ def main() -> None:
 
     scan = sub.add_parser("scan", help="Scan local folders and store metadata in SQLite")
     scan.add_argument("folders", nargs="+", help="One or more folders to scan")
+    scan.add_argument("--auto-sync", action="store_true", help="Automatically run sync after a successful scan")
+    scan.add_argument("--dj-mode", action="store_true", help="Enable DJ workflow mode (auto-sync + recent-first + safe automation)")
+    scan.add_argument("--use-fingerprint", action="store_true", help="Use fingerprint fallback during auto-sync")
+    scan.add_argument("--auto-reconcile-preview", action="store_true", help="Run safe reconciliation preview after auto-sync")
+    scan.add_argument("--limit", type=int, default=None, help="Optional limit for auto-sync matching scope")
+    scan.add_argument(
+        "--genre",
+        action="append",
+        default=None,
+        help="Auto-sync filter by routed target playlist/genre bucket. Repeat or comma-separate values.",
+    )
+    scan.add_argument("--recent-limit", type=int, default=None, help="Most recent N scanned tracks for auto-sync/reconcile")
     scan.set_defaults(func=cmd_scan)
 
     sync = sub.add_parser("sync", help="Match unsynced local tracks and sync to Spotify playlists")

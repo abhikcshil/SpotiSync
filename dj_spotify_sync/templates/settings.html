@@ -9,6 +9,17 @@
     <tr><th>Genre map path</th><td>{{ config.genre_map_path }}</td></tr>
     <tr><th>Spotify redirect URI</th><td>{{ config.spotify_redirect_uri }}</td></tr>
     <tr><th>Market</th><td>{{ config.market }}</td></tr>
+    <tr><th>DJ mode default</th><td>{{ config.dj_mode_default }}</td></tr>
+    <tr><th>DJ recent limit</th><td>{{ config.dj_recent_limit }}</td></tr>
+    <tr><th>DJ auto reconcile preview</th><td>{{ config.dj_auto_reconcile_preview }}</td></tr>
   </tbody>
 </table>
+
+<h2 class="h4">Routing configuration summary</h2>
+<ul>
+  <li>Manual overrides: {{ genre_map.manual_overrides | length }}</li>
+  <li>Folder mappings: {{ genre_map.folder_to_playlist | length }}</li>
+  <li>Genre mappings: {{ genre_map.genre_to_playlist | length }}</li>
+  <li>Automation rules: {{ genre_map.rules | length }}</li>
+</ul>
 {% endblock %}

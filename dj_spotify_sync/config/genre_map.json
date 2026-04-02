@@ -2,48 +2,33 @@
   "genre_to_playlist": {
     "latin": "Latin",
     "brazilian funk": "Brazilian Funk",
-
     "afro": "Afro",
     "afro house": "Afro House",
-
     "house": "House",
     "bh house": "Bass House",
     "house 2026": "House",
-
     "bh bass house": "Bass House",
     "bh dubstep": "Dubstep",
     "bh riddim": "Riddim",
-
     "edm": "EDM",
     "edm heroic": "EDM",
-
     "dnb": "DnB",
     "hype dnb": "DnB",
-
     "jersey club": "Jersey Club",
-
     "dance hall": "Dancehall",
-
     "rap": "Hip-Hop",
     "rap cs": "Rap Classics",
-
     "pop": "Pop",
-
     "punjabi": "Punjabi",
     "hindi": "Desi",
     "hindi bangers": "Desi",
     "south indian": "South Indian",
-
     "country": "Country",
     "rock": "Rock",
-
     "throwback": "Throwback",
     "y2k": "Y2K",
-
     "party": "Party",
-
     "line dance": "Line Dance",
-
     "mixes": "Unsorted",
     "music": "Unsorted",
     "tbd": "Unsorted",
@@ -76,6 +61,29 @@
       "field": "filename",
       "pattern": "edit",
       "playlist": "Unsorted"
+    }
+  ],
+  "folder_to_playlist": {
+    "house": "House",
+    "dubstep": "Dubstep",
+    "latin": "Latin"
+  },
+  "rules": [
+    {
+      "condition": {
+        "folder": "dubstep"
+      },
+      "action": {
+        "playlist": "Dubstep"
+      }
+    },
+    {
+      "condition": {
+        "genre_contains": "afro"
+      },
+      "action": {
+        "playlist": "Afro"
+      }
     }
   ]
 }
