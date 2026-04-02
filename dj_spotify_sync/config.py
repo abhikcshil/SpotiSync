@@ -35,6 +35,19 @@ class AppConfig:
         )
         self.unsorted_playlist_name = os.getenv("DJ_SYNC_UNSORTED_PLAYLIST", "Unsorted")
         self.market = os.getenv("SPOTIFY_MARKET", "US")
+        self.dj_mode_default = os.getenv("DJ_SYNC_DJ_MODE_DEFAULT", "0").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        self.dj_recent_limit = int(os.getenv("DJ_SYNC_DJ_RECENT_LIMIT", "300"))
+        self.dj_auto_reconcile_preview = os.getenv("DJ_SYNC_DJ_AUTO_RECONCILE_PREVIEW", "0").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
 
     def load_genre_map(self) -> Dict:
         if not self.genre_map_path.exists():
@@ -42,7 +55,9 @@ class AppConfig:
         with self.genre_map_path.open("r", encoding="utf-8") as fp:
             data = json.load(fp)
         data.setdefault("genre_to_playlist", {})
+        data.setdefault("folder_to_playlist", {})
         data.setdefault("manual_overrides", [])
+        data.setdefault("rules", [])
         return data
 
 
@@ -67,6 +82,11 @@ def ensure_default_genre_map(path: Path) -> None:
             "hip hop": "Hip-Hop",
             "rap": "Hip-Hop",
             "pop": "Pop",
+        },
+        "folder_to_playlist": {
+            "house": "House",
+            "dubstep": "Dubstep",
+            "latin": "Latin"
         },
         "manual_overrides": [
             {

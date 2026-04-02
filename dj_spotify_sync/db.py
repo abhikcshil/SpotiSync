@@ -501,6 +501,59 @@ class Database:
         ).fetchone()
         return dict(row)
 
+
+    def get_activity_insights(self) -> Dict[str, object]:
+        last_sync_added = 0
+        last_sync_row = self.conn.execute(
+            """
+            SELECT detail_json
+            FROM activity_log
+            WHERE source = 'sync' AND event_type = 'sync_completed' AND status = 'completed'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if last_sync_row and last_sync_row["detail_json"]:
+            try:
+                payload = json.loads(last_sync_row["detail_json"])
+                last_sync_added = int(payload.get("added", 0) or 0)
+            except Exception:
+                last_sync_added = 0
+
+        tracks_added_24h = self.conn.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM sync_history
+            WHERE status = 'added' AND synced_at >= datetime('now', '-1 day')
+            """
+        ).fetchone()["c"]
+
+        unresolved_count = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM spotify_matches WHERE status = 'unresolved'"
+        ).fetchone()["c"]
+        total_match_rows = self.conn.execute("SELECT COUNT(*) AS c FROM spotify_matches").fetchone()["c"]
+        unresolved_rate = round((unresolved_count / total_match_rows) * 100, 2) if total_match_rows else 0.0
+
+        top_genre_row = self.conn.execute(
+            """
+            SELECT
+                COALESCE(NULLIF(TRIM(genre), ''), 'Unknown') AS genre_name,
+                COUNT(*) AS c
+            FROM local_tracks
+            WHERE last_scanned_at >= datetime('now', '-7 day')
+            GROUP BY genre_name
+            ORDER BY c DESC, genre_name ASC
+            LIMIT 1
+            """
+        ).fetchone()
+
+        return {
+            "last_sync_added": int(last_sync_added),
+            "tracks_added_24h": int(tracks_added_24h or 0),
+            "unresolved_rate": unresolved_rate,
+            "top_genre_week": top_genre_row["genre_name"] if top_genre_row else "N/A",
+        }
+
     def get_recent_sync_activity(self, limit: int = 20) -> List[sqlite3.Row]:
         return self.conn.execute(
             """

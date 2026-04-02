@@ -6,7 +6,37 @@
     <label class="form-label">Folders (one per line)</label>
     <textarea class="form-control" name="folders" rows="5" placeholder="/Users/you/Music\n/mnt/dj_pool">{{ folders }}</textarea>
   </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-md-6">
+      <div class="form-check">
+        <input class="form-check-input" type="checkbox" id="autoSync" name="auto_sync" {% if auto_sync %}checked{% endif %}>
+        <label class="form-check-label" for="autoSync">Automatically sync after scan</label>
+      </div>
+      <div class="form-check mt-2">
+        <input class="form-check-input" type="checkbox" id="djMode" name="dj_mode" {% if dj_mode %}checked{% endif %}>
+        <label class="form-check-label" for="djMode">DJ Workflow Mode</label>
+      </div>
+      <div class="form-check mt-2">
+        <input class="form-check-input" type="checkbox" id="useFingerprint" name="use_fingerprint" {% if use_fingerprint %}checked{% endif %}>
+        <label class="form-check-label" for="useFingerprint">Use fingerprint fallback during auto-sync</label>
+      </div>
+      <div class="form-check mt-2">
+        <input class="form-check-input" type="checkbox" id="autoReconcilePreview" name="auto_reconcile_preview" {% if auto_reconcile_preview %}checked{% endif %}>
+        <label class="form-check-label" for="autoReconcilePreview">Run safe reconciliation preview after auto-sync</label>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <label class="form-label" for="recentLimit">Recent limit (auto workflow)</label>
+      <input class="form-control" id="recentLimit" name="recent_limit" value="{{ recent_limit }}" placeholder="e.g. 300">
+    </div>
+    <div class="col-md-3">
+      <label class="form-label" for="limit">Hard cap (auto workflow)</label>
+      <input class="form-control" id="limit" name="limit" value="{{ limit }}" placeholder="optional">
+    </div>
+  </div>
+
   <button class="btn btn-primary" type="submit">Start scan</button>
 </form>
-<p class="text-muted">Scan jobs now run in the background. You will be redirected to a live progress page.</p>
+<p class="text-muted">Scan jobs run in the background. With automation enabled, scan can chain into sync (and optional safe reconciliation preview).</p>
 {% endblock %}

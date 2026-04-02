@@ -5,6 +5,7 @@ from typing import Dict, Iterable, List, Optional
 
 from mutagen import File as MutagenFile
 
+from .rules_engine import RoutingRulesEngine
 from .utils import infer_title_artist_from_filename, safe_str
 
 SUPPORTED_EXTENSIONS = {".mp3", ".flac", ".m4a", ".wav"}
@@ -15,7 +16,11 @@ class GenreRouter:
         self.genre_to_playlist = {
             k.lower().strip(): v for k, v in genre_map.get("genre_to_playlist", {}).items()
         }
+        self.folder_to_playlist = {
+            k.lower().strip(): v for k, v in genre_map.get("folder_to_playlist", {}).items()
+        }
         self.manual_overrides = genre_map.get("manual_overrides", [])
+        self.rules_engine = RoutingRulesEngine(genre_map.get("rules", []))
         self.unsorted_playlist = unsorted_playlist
 
     def route(self, track: Dict) -> str:
@@ -31,6 +36,14 @@ class GenreRouter:
                 return playlist
             if match_type == "contains" and pattern in val:
                 return playlist
+
+        folder = str(track.get("folder_name", "") or "").lower().strip()
+        if folder and folder in self.folder_to_playlist:
+            return self.folder_to_playlist[folder]
+
+        rules_playlist = self.rules_engine.resolve_playlist(track)
+        if rules_playlist:
+            return rules_playlist
 
         genre = str(track.get("genre", "") or "").lower().strip()
         for key, playlist in self.genre_to_playlist.items():
@@ -97,9 +110,11 @@ class MusicScanner:
                 inferred = True
 
         stat = file_path.stat()
+        folder_name = file_path.parent.name.strip().lower()
         track = {
             "file_path": str(file_path),
             "filename": file_path.name,
+            "folder_name": folder_name,
             "title": title,
             "artist": artist,
             "album": album,

@@ -96,6 +96,117 @@ def _log_activity(
     )
 
 
+def _iso_utc_now() -> str:
+    return datetime.utcnow().replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _resolve_scan_workflow_options(
+    *,
+    auto_sync: bool,
+    dj_mode: bool,
+    use_fingerprint: Optional[bool],
+    recent_limit: Optional[int],
+    auto_reconcile_preview: bool,
+    config: AppConfig,
+) -> Dict[str, object]:
+    fingerprint_enabled = use_fingerprint if use_fingerprint is not None else config.use_fingerprint_default
+    resolved_recent_limit = recent_limit
+    resolved_auto_sync = auto_sync
+    resolved_reconcile_preview = auto_reconcile_preview
+
+    if dj_mode:
+        resolved_auto_sync = True
+        if resolved_recent_limit is None:
+            resolved_recent_limit = config.dj_recent_limit
+        resolved_reconcile_preview = resolved_reconcile_preview or config.dj_auto_reconcile_preview
+
+    return {
+        "auto_sync": resolved_auto_sync,
+        "dj_mode": dj_mode,
+        "use_fingerprint": bool(fingerprint_enabled),
+        "recent_limit": resolved_recent_limit,
+        "auto_reconcile_preview": resolved_reconcile_preview,
+    }
+
+
+def run_scan_workflow(
+    folders: Iterable[str],
+    *,
+    auto_sync: bool = False,
+    dj_mode: bool = False,
+    use_fingerprint: Optional[bool] = None,
+    recent_limit: Optional[int] = None,
+    auto_reconcile_preview: bool = False,
+    target_playlists: Optional[Iterable[str]] = None,
+    limit: Optional[int] = None,
+    config: Optional[AppConfig] = None,
+    progress_callback: Optional[ProgressCallback] = None,
+    job_id: Optional[str] = None,
+) -> Dict:
+    cfg = config or AppConfig()
+    workflow = _resolve_scan_workflow_options(
+        auto_sync=auto_sync,
+        dj_mode=dj_mode,
+        use_fingerprint=use_fingerprint,
+        recent_limit=recent_limit,
+        auto_reconcile_preview=auto_reconcile_preview,
+        config=cfg,
+    )
+
+    scan_started_at = _iso_utc_now()
+    scan_summary = run_scan(
+        folders,
+        config=cfg,
+        progress_callback=progress_callback,
+        job_id=job_id,
+    )
+
+    result: Dict[str, object] = {
+        "scan": scan_summary,
+        "workflow": workflow,
+        "sync": None,
+        "reconcile_preview": None,
+    }
+
+    if not workflow["auto_sync"]:
+        return result
+
+    if progress_callback:
+        progress_callback(
+            scan_summary.get("processed", 0),
+            scan_summary.get("processed", 0),
+            "Scan completed. Starting automatic sync...",
+            {"phase": "auto_sync"},
+        )
+
+    sync_summary = run_sync(
+        limit=limit,
+        target_playlists=target_playlists,
+        since=scan_started_at,
+        recent_limit=workflow["recent_limit"],
+        use_fingerprint=bool(workflow["use_fingerprint"]),
+        config=cfg,
+        progress_callback=progress_callback,
+        job_id=job_id,
+    )
+    result["sync"] = sync_summary
+
+    if workflow["auto_reconcile_preview"]:
+        reconcile_summary = run_reconcile(
+            apply_changes=False,
+            target_playlists=target_playlists,
+            since=scan_started_at,
+            recent_limit=workflow["recent_limit"],
+            limit=limit,
+            config=cfg,
+            progress_callback=progress_callback,
+            job_id=job_id,
+        )
+        result["reconcile_preview"] = reconcile_summary
+
+    return result
+
+
 def run_scan(
     folders: Iterable[str],
     config: Optional[AppConfig] = None,

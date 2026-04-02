@@ -9,6 +9,14 @@
   <div class="col-md-2"><div class="card stat-card"><div class="card-body"><div>Playlists</div><h3>{{ stats.playlist_count }}</h3></div></div></div>
 </div>
 
+<h2 class="h4">Workflow insights</h2>
+<div class="row g-3 mb-4">
+  <div class="col-md-3"><div class="card"><div class="card-body"><div class="text-muted small">Last sync added</div><h4>{{ insights.last_sync_added }}</h4></div></div></div>
+  <div class="col-md-3"><div class="card"><div class="card-body"><div class="text-muted small">Top genre (7 days)</div><h4>{{ insights.top_genre_week }}</h4></div></div></div>
+  <div class="col-md-3"><div class="card"><div class="card-body"><div class="text-muted small">Unresolved rate</div><h4>{{ insights.unresolved_rate }}%</h4></div></div></div>
+  <div class="col-md-3"><div class="card"><div class="card-body"><div class="text-muted small">Tracks added (24h)</div><h4>{{ insights.tracks_added_24h }}</h4></div></div></div>
+</div>
+
 <div class="mb-4 d-flex gap-2 flex-wrap">
   <a class="btn btn-primary" href="{{ url_for('scan_page') }}">Start scan</a>
   <a class="btn btn-success" href="{{ url_for('sync_page') }}">Start sync</a>

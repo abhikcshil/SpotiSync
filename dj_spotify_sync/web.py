@@ -15,7 +15,7 @@ from .services import (
     run_check_query,
     run_gap_detection,
     run_reconcile,
-    run_scan,
+    run_scan_workflow,
     run_sync,
 )
 
@@ -50,11 +50,13 @@ def dashboard():
         stats = db.get_dashboard_stats()
         recent_activity = [dict(row) for row in db.get_recent_sync_activity(limit=15)]
         activity_feed = [dict(row) for row in db.get_activity_logs(limit=10)]
+        insights = db.get_activity_insights()
         return render_template(
             "dashboard.html",
             stats=stats,
             recent_activity=recent_activity,
             activity_feed=activity_feed,
+            insights=insights,
             config=config,
         )
     finally:
@@ -63,19 +65,67 @@ def dashboard():
 
 @app.route("/scan", methods=["GET", "POST"])
 def scan_page():
+    cfg = _get_config()
+    initial = {
+        "folders": "",
+        "auto_sync": False,
+        "dj_mode": cfg.dj_mode_default,
+        "use_fingerprint": cfg.use_fingerprint_default,
+        "auto_reconcile_preview": cfg.dj_auto_reconcile_preview,
+        "recent_limit": "",
+        "limit": "",
+    }
+
     if request.method == "POST":
         raw_paths = request.form.get("folders", "")
         folders = [line.strip() for line in raw_paths.splitlines() if line.strip()]
+        auto_sync = request.form.get("auto_sync") == "on"
+        dj_mode = request.form.get("dj_mode") == "on"
+        use_fingerprint = request.form.get("use_fingerprint") == "on"
+        auto_reconcile_preview = request.form.get("auto_reconcile_preview") == "on"
+        raw_recent_limit = request.form.get("recent_limit", "").strip()
+        raw_limit = request.form.get("limit", "").strip()
 
         if not folders:
             flash("Please provide at least one folder path.", "danger")
-            return render_template("scan.html", folders=raw_paths)
+            return render_template(
+                "scan.html",
+                folders=raw_paths,
+                auto_sync=auto_sync,
+                dj_mode=dj_mode,
+                use_fingerprint=use_fingerprint,
+                auto_reconcile_preview=auto_reconcile_preview,
+                recent_limit=raw_recent_limit,
+                limit=raw_limit,
+            )
+
+        try:
+            recent_limit = int(raw_recent_limit) if raw_recent_limit else None
+            limit = int(raw_limit) if raw_limit else None
+        except ValueError:
+            flash("Recent limit and limit must be valid integers.", "danger")
+            return render_template(
+                "scan.html",
+                folders=raw_paths,
+                auto_sync=auto_sync,
+                dj_mode=dj_mode,
+                use_fingerprint=use_fingerprint,
+                auto_reconcile_preview=auto_reconcile_preview,
+                recent_limit=raw_recent_limit,
+                limit=raw_limit,
+            )
 
         job = job_manager.create_job("scan")
 
         def _run_scan_job() -> dict:
-            return run_scan(
+            return run_scan_workflow(
                 folders,
+                auto_sync=auto_sync,
+                dj_mode=dj_mode,
+                use_fingerprint=use_fingerprint,
+                recent_limit=recent_limit,
+                auto_reconcile_preview=auto_reconcile_preview,
+                limit=limit,
                 progress_callback=lambda current, total, message, extra=None: job_manager.update_progress(
                     job.job_id, current=current, total=total, message=message, extra=extra
                 ),
@@ -85,7 +135,7 @@ def scan_page():
         job_manager.start_job(job, _run_scan_job)
         return redirect(url_for("job_page", job_id=job.job_id))
 
-    return render_template("scan.html", folders="")
+    return render_template("scan.html", **initial)
 
 
 @app.route("/sync", methods=["GET", "POST"])
@@ -322,7 +372,8 @@ def playlists_page():
 @app.route("/settings")
 def settings_page():
     config = _get_config()
-    return render_template("settings.html", config=config)
+    genre_map = config.load_genre_map()
+    return render_template("settings.html", config=config, genre_map=genre_map)
 
 
 @app.route("/gap", methods=["GET", "POST"])
