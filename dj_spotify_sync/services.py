@@ -4,6 +4,8 @@ from collections import defaultdict
 import csv
 import io
 from datetime import datetime
+import hashlib
+from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
 from rapidfuzz import fuzz
@@ -98,6 +100,23 @@ def _log_activity(
 
 def _iso_utc_now() -> str:
     return datetime.utcnow().replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _is_blank_csv_row(values: Iterable[object]) -> bool:
+    for value in values:
+        if str(value or "").strip():
+            return False
+    return True
+
+
+def _normalize_csv_cell(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _build_csv_request_track_id(song_name: str, artist_name: str, genre: str) -> str:
+    payload = f"{song_name}\u241f{artist_name}\u241f{genre}".lower()
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
+    return f"request_csv://{digest}"
 
 
 def _resolve_scan_workflow_options(
@@ -299,6 +318,188 @@ def run_scan(
         db.close()
 
 
+def run_import_csv_requests(
+    csv_path: str,
+    *,
+    sync_now: bool = False,
+    use_fingerprint: bool = False,
+    config: Optional[AppConfig] = None,
+    progress_callback: Optional[ProgressCallback] = None,
+    job_id: Optional[str] = None,
+) -> Dict:
+    cfg = config or AppConfig()
+    ensure_default_genre_map(cfg.genre_map_path)
+    genre_map = cfg.load_genre_map()
+    router = GenreRouter(genre_map, unsorted_playlist=cfg.unsorted_playlist_name)
+    db = Database(cfg.db_path)
+    import_started_at = _iso_utc_now()
+
+    summary = {
+        "csv_path": str(Path(csv_path).expanduser().resolve()),
+        "rows_read": 0,
+        "rows_skipped": 0,
+        "blank_rows_skipped": 0,
+        "missing_song_name_skipped": 0,
+        "duplicates_skipped": 0,
+        "missing_genre_mappings": 0,
+        "imported_count": 0,
+        "unresolved_count": 0,
+        "matched_count": 0,
+        "added_count": 0,
+        "sync": None,
+    }
+    imported_playlists: set[str] = set()
+    seen_ids: set[str] = set()
+
+    _log_activity(
+        db,
+        source="request_csv",
+        event_type="request_csv_import_started",
+        status="started",
+        summary=f"CSV request import started: {csv_path}",
+        detail={"csv_path": csv_path, "sync_now": sync_now, "use_fingerprint": use_fingerprint},
+        job_id=job_id,
+    )
+
+    try:
+        with open(csv_path, "r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if not reader.fieldnames:
+                raise ValueError("CSV must include a header row.")
+
+            normalized_columns = {_normalize_csv_cell(name).lower() for name in reader.fieldnames if name}
+            required = {"song_name", "artist_name", "genre"}
+            missing = sorted(required - normalized_columns)
+            if missing:
+                raise ValueError(f"Missing required CSV columns: {', '.join(missing)}")
+
+            for row_number, row in enumerate(reader, start=2):
+                if _is_blank_csv_row(row.values()):
+                    summary["rows_skipped"] += 1
+                    summary["blank_rows_skipped"] += 1
+                    continue
+
+                summary["rows_read"] += 1
+                song_name = _normalize_csv_cell(row.get("song_name"))
+                artist_name = _normalize_csv_cell(row.get("artist_name"))
+                genre_value = _normalize_csv_cell(row.get("genre"))
+
+                if not song_name:
+                    summary["rows_skipped"] += 1
+                    summary["missing_song_name_skipped"] += 1
+                    continue
+
+                effective_genre = genre_value or cfg.request_csv_default_genre
+                synthetic_id = _build_csv_request_track_id(song_name, artist_name, effective_genre)
+                if synthetic_id in seen_ids or db.get_local_track_by_file_path(synthetic_id):
+                    summary["rows_skipped"] += 1
+                    summary["duplicates_skipped"] += 1
+                    continue
+                seen_ids.add(synthetic_id)
+
+                route_playlist_name = router.route(
+                    {
+                        "title": song_name,
+                        "artist": artist_name,
+                        "genre": effective_genre,
+                        "filename": f"{artist_name} - {song_name}".strip(" -"),
+                        "folder_name": "",
+                    }
+                )
+
+                missing_mapping = bool(genre_value) and route_playlist_name == cfg.unsorted_playlist_name
+                if missing_mapping and cfg.request_csv_default_playlist:
+                    route_playlist_name = cfg.request_csv_default_playlist
+                elif missing_mapping:
+                    summary["missing_genre_mappings"] += 1
+
+                local_track_id = db.upsert_local_track(
+                    {
+                        "file_path": synthetic_id,
+                        "filename": f"CSV:{song_name}"[:255],
+                        "source": "request_csv",
+                        "title": song_name,
+                        "artist": artist_name or None,
+                        "album": None,
+                        "genre": effective_genre or None,
+                        "duration_sec": None,
+                        "modified_time": float(row_number),
+                        "inferred_metadata": True,
+                        "route_playlist_name": route_playlist_name,
+                    }
+                )
+                summary["imported_count"] += 1
+                imported_playlists.add(route_playlist_name)
+
+                if missing_mapping and not cfg.request_csv_default_playlist:
+                    db.upsert_spotify_match(
+                        {
+                            "local_track_id": local_track_id,
+                            "spotify_uri": None,
+                            "spotify_track_name": None,
+                            "spotify_artists": None,
+                            "confidence_score": 0.0,
+                            "match_source": "request_csv",
+                            "status_reason": "missing genre mapping",
+                            "status": "unresolved",
+                        }
+                    )
+                    summary["unresolved_count"] += 1
+
+        sync_summary = None
+        if sync_now and summary["imported_count"] > 0:
+            sync_summary = run_sync(
+                target_playlists=sorted(imported_playlists),
+                since=import_started_at,
+                use_fingerprint=use_fingerprint,
+                config=cfg,
+                progress_callback=progress_callback,
+                job_id=job_id,
+            )
+            summary["sync"] = sync_summary
+            summary["matched_count"] = sync_summary["matched"]
+            summary["added_count"] = sync_summary["added"]
+            summary["unresolved_count"] += sync_summary["unresolved"]
+
+        _log_activity(
+            db,
+            source="request_csv",
+            event_type="request_csv_import_completed",
+            status="completed",
+            summary=(
+                f"CSV request import completed: read={summary['rows_read']} imported={summary['imported_count']} "
+                f"skipped={summary['rows_skipped']} unresolved={summary['unresolved_count']}"
+            ),
+            detail=summary,
+            job_id=job_id,
+        )
+        return summary
+    except csv.Error as exc:
+        _log_activity(
+            db,
+            source="request_csv",
+            event_type="request_csv_import_failed",
+            status="failed",
+            summary=f"CSV parse failed: {exc}",
+            detail={"csv_path": csv_path, "error": str(exc)},
+            job_id=job_id,
+        )
+        raise ValueError(f"Malformed CSV: {exc}") from exc
+    except Exception as exc:
+        _log_activity(
+            db,
+            source="request_csv",
+            event_type="request_csv_import_failed",
+            status="failed",
+            summary=f"CSV request import failed: {exc}",
+            detail={"csv_path": csv_path, "error": str(exc)},
+            job_id=job_id,
+        )
+        raise
+    finally:
+        db.close()
+
+
 def run_sync(
     limit: Optional[int] = None,
     target_playlists: Optional[Iterable[str]] = None,
@@ -409,6 +610,7 @@ def run_sync(
                 "spotify_artists": result.get("spotify_artists"),
                 "confidence_score": result.get("confidence_score"),
                 "match_source": result.get("match_source") or "metadata",
+                "status_reason": result.get("message"),
                 "fingerprint_confidence": result.get("fingerprint_confidence"),
                 "acoustid_id": result.get("acoustid_id"),
                 "recording_id": result.get("recording_id"),

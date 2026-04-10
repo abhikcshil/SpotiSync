@@ -5,7 +5,14 @@ import argparse
 from .checker import run_check
 from .config import AppConfig
 from .db import Database
-from .services import build_download_queue_csv, run_gap_detection, run_reconcile, run_scan_workflow, run_sync
+from .services import (
+    build_download_queue_csv,
+    run_gap_detection,
+    run_import_csv_requests,
+    run_reconcile,
+    run_scan_workflow,
+    run_sync,
+)
 from .spotify_client import SpotifyClient
 
 
@@ -145,6 +152,23 @@ def cmd_gap(args) -> None:
         print(f"Download queue CSV exported: {args.export_csv} ({summary['queue_count']} rows)")
 
 
+def cmd_import_csv_requests(args) -> None:
+    summary = run_import_csv_requests(
+        args.csv_path,
+        sync_now=args.sync,
+        use_fingerprint=args.use_fingerprint,
+    )
+    print(
+        "CSV import complete. "
+        f"rows_read={summary['rows_read']}, rows_skipped={summary['rows_skipped']}, "
+        f"imported={summary['imported_count']}, missing_genre_mappings={summary['missing_genre_mappings']}"
+    )
+    print(
+        "Results: "
+        f"matched={summary['matched_count']}, added={summary['added_count']}, unresolved={summary['unresolved_count']}"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="DJ local library to Spotify playlist sync MVP")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -234,6 +258,16 @@ def main() -> None:
         help="Optional CSV path for missing-track download queue export.",
     )
     gap.set_defaults(func=cmd_gap)
+
+    import_csv = sub.add_parser("import-csv-requests", help="Import CSV song requests and optionally sync")
+    import_csv.add_argument("csv_path", help="Path to CSV file with song_name, artist_name, genre columns")
+    import_csv.add_argument("--sync", action="store_true", help="Run matching+sync immediately for imported rows")
+    import_csv.add_argument(
+        "--use-fingerprint",
+        action="store_true",
+        help="Enable advanced fingerprint fallback while syncing imported rows",
+    )
+    import_csv.set_defaults(func=cmd_import_csv_requests)
 
     args = parser.parse_args()
     args.func(args)
