@@ -48,6 +48,8 @@ class AppConfig:
             "yes",
             "on",
         )
+        self.request_csv_default_genre = os.getenv("DJ_SYNC_REQUEST_CSV_DEFAULT_GENRE", "Requests").strip()
+        self.request_csv_default_playlist = os.getenv("DJ_SYNC_REQUEST_CSV_DEFAULT_PLAYLIST", "").strip()
 
     def load_genre_map(self) -> Dict:
         if not self.genre_map_path.exists():

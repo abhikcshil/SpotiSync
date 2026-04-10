@@ -12,6 +12,7 @@ from .jobs import job_manager
 from .services import (
     build_download_queue_csv,
     get_sync_target_playlists,
+    run_import_csv_requests,
     run_check_query,
     run_gap_detection,
     run_reconcile,
@@ -406,6 +407,55 @@ def gap_page():
             return render_template("gap.html", sources=raw_sources, gap_result=gap_result)
 
     return render_template("gap.html", sources=raw_sources, gap_result=gap_result)
+
+
+@app.route("/import-csv", methods=["GET", "POST"])
+def import_csv_page():
+    sync_now = True
+    use_fingerprint = _get_config().use_fingerprint_default
+    summary = None
+
+    if request.method == "POST":
+        sync_now = request.form.get("sync_now") == "on"
+        use_fingerprint = request.form.get("use_fingerprint") == "on"
+        upload = request.files.get("csv_file")
+        if not upload or not upload.filename:
+            flash("Please select a CSV file to import.", "danger")
+            return render_template(
+                "import_csv.html",
+                sync_now=sync_now,
+                use_fingerprint=use_fingerprint,
+                summary=summary,
+            )
+
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+            upload.save(tmp.name)
+            temp_path = tmp.name
+
+        try:
+            summary = run_import_csv_requests(
+                temp_path,
+                sync_now=sync_now,
+                use_fingerprint=use_fingerprint,
+            )
+            flash(
+                (
+                    f"CSV imported: read={summary['rows_read']}, imported={summary['imported_count']}, "
+                    f"unresolved={summary['unresolved_count']}, added={summary['added_count']}"
+                ),
+                "success",
+            )
+        except Exception as exc:
+            flash(f"CSV import failed: {exc}", "danger")
+
+    return render_template(
+        "import_csv.html",
+        sync_now=sync_now,
+        use_fingerprint=use_fingerprint,
+        summary=summary,
+    )
 
 
 @app.route("/health")

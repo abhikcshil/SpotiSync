@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Import CSV Requests</h1>
+<form method="post" enctype="multipart/form-data" class="row g-3 align-items-end mb-4">
+  <div class="col-md-5">
+    <label class="form-label">CSV file</label>
+    <input class="form-control" type="file" name="csv_file" accept=".csv,text/csv" required>
+    <div class="form-text">Required columns: <code>song_name</code>, <code>artist_name</code>, <code>genre</code>.</div>
+  </div>
+  <div class="col-md-3">
+    <div class="form-check mt-4">
+      <input class="form-check-input" type="checkbox" name="sync_now" id="syncNow" {% if sync_now %}checked{% endif %}>
+      <label class="form-check-label" for="syncNow">Match + sync immediately</label>
+    </div>
+    <div class="form-check mt-2">
+      <input class="form-check-input" type="checkbox" name="use_fingerprint" id="csvFingerprint" {% if use_fingerprint %}checked{% endif %}>
+      <label class="form-check-label" for="csvFingerprint">Use fingerprint fallback</label>
+    </div>
+  </div>
+  <div class="col-md-2">
+    <button class="btn btn-primary" type="submit">Import CSV</button>
+  </div>
+</form>
+
+{% if summary %}
+<div class="card">
+  <div class="card-header">Import summary</div>
+  <div class="card-body">
+    <ul class="mb-0">
+      <li>Rows read: {{ summary.rows_read }}</li>
+      <li>Rows skipped: {{ summary.rows_skipped }}</li>
+      <li>Imported count: {{ summary.imported_count }}</li>
+      <li>Matched count: {{ summary.matched_count }}</li>
+      <li>Added count: {{ summary.added_count }}</li>
+      <li>Unresolved count: {{ summary.unresolved_count }}</li>
+      <li>Missing genre mappings: {{ summary.missing_genre_mappings }}</li>
+    </ul>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

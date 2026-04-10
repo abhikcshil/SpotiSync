@@ -9,6 +9,7 @@ class LocalTrack:
     id: Optional[int]
     file_path: str
     filename: str
+    source: Optional[str]
     title: Optional[str]
     artist: Optional[str]
     album: Optional[str]
@@ -27,6 +28,7 @@ class SpotifyMatch:
     spotify_track_name: Optional[str]
     spotify_artists: Optional[str]
     confidence_score: Optional[float]
+    status_reason: Optional[str]
     status: str
     matched_at: str
 

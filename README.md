@@ -20,6 +20,7 @@ Core capabilities:
 - Playlist sync with duplicate avoidance + sync history logging
 - Reconciliation preview/apply for app-managed playlists
 - Gap detection against source Spotify playlists + CSV download queue export
+- CSV request import (`song_name`, `artist_name`, `genre`) with optional immediate sync
 - Activity logs, dashboard metrics, library browsing, unresolved queue
 
 ---
@@ -135,6 +136,8 @@ Recommended redirect URI default:
 - `DJ_SYNC_DB_PATH` (SQLite file path)
 - `DJ_SYNC_GENRE_MAP` (genre/routing JSON path)
 - `DJ_SYNC_UNSORTED_PLAYLIST` (default fallback playlist name, default `Unsorted`)
+- `DJ_SYNC_REQUEST_CSV_DEFAULT_GENRE` (default `Requests`; used when CSV `genre` is blank)
+- `DJ_SYNC_REQUEST_CSV_DEFAULT_PLAYLIST` (optional fallback playlist when CSV genre has no mapping)
 
 ### Matching controls
 
@@ -252,6 +255,17 @@ Export missing queue CSV:
 ```bash
 python -m dj_spotify_sync.app gap --playlist "id1" --export-csv ./missing_queue.csv
 ```
+
+### `import-csv-requests` — import synthetic request rows from CSV
+
+```bash
+python -m dj_spotify_sync.app import-csv-requests ./requests.csv --sync
+```
+
+Options:
+
+- `--sync` : run match + playlist sync immediately for imported rows
+- `--use-fingerprint` : enable fingerprint fallback during immediate sync
 
 ### `gui` — start local web UI
 

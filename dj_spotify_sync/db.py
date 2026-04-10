@@ -22,6 +22,7 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_path TEXT UNIQUE NOT NULL,
                 filename TEXT NOT NULL,
+                source TEXT DEFAULT 'scan',
                 title TEXT,
                 artist TEXT,
                 album TEXT,
@@ -41,6 +42,7 @@ class Database:
                 spotify_artists TEXT,
                 confidence_score REAL,
                 match_source TEXT DEFAULT 'metadata',
+                status_reason TEXT,
                 fingerprint_confidence REAL,
                 acoustid_id TEXT,
                 recording_id TEXT,
@@ -98,7 +100,9 @@ class Database:
         self.conn.commit()
 
     def _migrate_schema(self) -> None:
+        self._ensure_column("local_tracks", "source", "TEXT DEFAULT 'scan'")
         self._ensure_column("spotify_matches", "match_source", "TEXT DEFAULT 'metadata'")
+        self._ensure_column("spotify_matches", "status_reason", "TEXT")
         self._ensure_column("spotify_matches", "fingerprint_confidence", "REAL")
         self._ensure_column("spotify_matches", "acoustid_id", "TEXT")
         self._ensure_column("spotify_matches", "recording_id", "TEXT")
@@ -114,11 +118,12 @@ class Database:
         cur.execute(
             """
             INSERT INTO local_tracks (
-                file_path, filename, title, artist, album, genre,
+                file_path, filename, source, title, artist, album, genre,
                 duration_sec, modified_time, inferred_metadata, route_playlist_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(file_path) DO UPDATE SET
                 filename=excluded.filename,
+                source=excluded.source,
                 title=excluded.title,
                 artist=excluded.artist,
                 album=excluded.album,
@@ -132,6 +137,7 @@ class Database:
             (
                 track["file_path"],
                 track["filename"],
+                track.get("source") or "scan",
                 track.get("title"),
                 track.get("artist"),
                 track.get("album"),
@@ -148,6 +154,9 @@ class Database:
     def get_local_track_id(self, file_path: str) -> int:
         row = self.conn.execute("SELECT id FROM local_tracks WHERE file_path = ?", (file_path,)).fetchone()
         return int(row["id"])
+
+    def get_local_track_by_file_path(self, file_path: str) -> Optional[sqlite3.Row]:
+        return self.conn.execute("SELECT * FROM local_tracks WHERE file_path = ?", (file_path,)).fetchone()
 
     def _build_track_filter_clauses(
         self,
@@ -218,14 +227,15 @@ class Database:
             """
             INSERT INTO spotify_matches (
                 local_track_id, spotify_uri, spotify_track_name, spotify_artists,
-                confidence_score, match_source, fingerprint_confidence, acoustid_id, recording_id, status, matched_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                confidence_score, match_source, status_reason, fingerprint_confidence, acoustid_id, recording_id, status, matched_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(local_track_id) DO UPDATE SET
                 spotify_uri=excluded.spotify_uri,
                 spotify_track_name=excluded.spotify_track_name,
                 spotify_artists=excluded.spotify_artists,
                 confidence_score=excluded.confidence_score,
                 match_source=excluded.match_source,
+                status_reason=excluded.status_reason,
                 fingerprint_confidence=excluded.fingerprint_confidence,
                 acoustid_id=excluded.acoustid_id,
                 recording_id=excluded.recording_id,
@@ -239,6 +249,7 @@ class Database:
                 payload.get("spotify_artists"),
                 payload.get("confidence_score"),
                 payload.get("match_source") or "metadata",
+                payload.get("status_reason"),
                 payload.get("fingerprint_confidence"),
                 payload.get("acoustid_id"),
                 payload.get("recording_id"),
@@ -621,7 +632,7 @@ class Database:
     def get_unresolved_tracks(self, limit: int = 500) -> List[sqlite3.Row]:
         return self.conn.execute(
             """
-            SELECT lt.*, sm.status AS match_status, sm.confidence_score
+            SELECT lt.*, sm.status AS match_status, sm.confidence_score, sm.status_reason
             FROM local_tracks lt
             LEFT JOIN spotify_matches sm ON sm.local_track_id = lt.id
             WHERE sm.status = 'unresolved' OR sm.status = 'error' OR sm.id IS NULL
