@@ -27,11 +27,15 @@ class Database:
                 artist TEXT,
                 album TEXT,
                 genre TEXT,
+                metadata_genre TEXT,
+                db_genre TEXT,
+                sync_status TEXT,
                 duration_sec REAL,
                 modified_time REAL NOT NULL,
                 inferred_metadata INTEGER NOT NULL DEFAULT 0,
                 route_playlist_name TEXT,
-                last_scanned_at TEXT DEFAULT CURRENT_TIMESTAMP
+                last_scanned_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                last_tagged_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS spotify_matches (
@@ -101,11 +105,40 @@ class Database:
 
     def _migrate_schema(self) -> None:
         self._ensure_column("local_tracks", "source", "TEXT DEFAULT 'scan'")
+        self._ensure_column("local_tracks", "metadata_genre", "TEXT")
+        self._ensure_column("local_tracks", "db_genre", "TEXT")
+        self._ensure_column("local_tracks", "sync_status", "TEXT")
+        self._ensure_column("local_tracks", "last_tagged_at", "TEXT")
         self._ensure_column("spotify_matches", "match_source", "TEXT DEFAULT 'metadata'")
         self._ensure_column("spotify_matches", "status_reason", "TEXT")
         self._ensure_column("spotify_matches", "fingerprint_confidence", "REAL")
         self._ensure_column("spotify_matches", "acoustid_id", "TEXT")
         self._ensure_column("spotify_matches", "recording_id", "TEXT")
+        self.conn.execute(
+            """
+            UPDATE local_tracks
+            SET metadata_genre = COALESCE(metadata_genre, genre)
+            WHERE metadata_genre IS NULL
+            """
+        )
+        self.conn.execute(
+            """
+            UPDATE local_tracks
+            SET db_genre = COALESCE(db_genre, genre)
+            WHERE db_genre IS NULL
+            """
+        )
+        self.conn.execute(
+            """
+            UPDATE local_tracks
+            SET sync_status = CASE
+                WHEN TRIM(COALESCE(genre, '')) = '' THEN COALESCE(sync_status, 'untagged')
+                WHEN COALESCE(metadata_genre, genre) = COALESCE(db_genre, genre) THEN COALESCE(sync_status, 'synced')
+                ELSE COALESCE(sync_status, 'db_sync_pending')
+            END
+            WHERE sync_status IS NULL
+            """
+        )
 
     def _ensure_column(self, table: str, column: str, column_sql: str) -> None:
         rows = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -118,9 +151,9 @@ class Database:
         cur.execute(
             """
             INSERT INTO local_tracks (
-                file_path, filename, source, title, artist, album, genre,
+                file_path, filename, source, title, artist, album, genre, metadata_genre, db_genre, sync_status,
                 duration_sec, modified_time, inferred_metadata, route_playlist_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(file_path) DO UPDATE SET
                 filename=excluded.filename,
                 source=excluded.source,
@@ -128,6 +161,9 @@ class Database:
                 artist=excluded.artist,
                 album=excluded.album,
                 genre=excluded.genre,
+                metadata_genre=excluded.metadata_genre,
+                db_genre=excluded.db_genre,
+                sync_status=excluded.sync_status,
                 duration_sec=excluded.duration_sec,
                 modified_time=excluded.modified_time,
                 inferred_metadata=excluded.inferred_metadata,
@@ -142,6 +178,9 @@ class Database:
                 track.get("artist"),
                 track.get("album"),
                 track.get("genre"),
+                track.get("metadata_genre", track.get("genre")),
+                track.get("db_genre", track.get("genre")),
+                track.get("sync_status") or ("synced" if track.get("genre") else "untagged"),
                 track.get("duration_sec"),
                 track["modified_time"],
                 1 if track.get("inferred_metadata") else 0,
@@ -157,6 +196,109 @@ class Database:
 
     def get_local_track_by_file_path(self, file_path: str) -> Optional[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM local_tracks WHERE file_path = ?", (file_path,)).fetchone()
+
+    def get_local_track_by_id(self, track_id: int) -> Optional[sqlite3.Row]:
+        return self.conn.execute("SELECT * FROM local_tracks WHERE id = ?", (track_id,)).fetchone()
+
+    def get_untagged_tracks(self, limit: int = 500) -> List[sqlite3.Row]:
+        return self.conn.execute(
+            """
+            SELECT *
+            FROM local_tracks
+            WHERE TRIM(COALESCE(genre, '')) = ''
+            ORDER BY last_scanned_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    def _build_library_search_clause(self, search_text: str) -> tuple[str, List[str]]:
+        cleaned = str(search_text or "").strip()
+        if not cleaned:
+            return "", []
+        like = f"%{cleaned}%"
+        return (
+            """
+            WHERE (
+                COALESCE(lt.title, '') LIKE ?
+                OR COALESCE(lt.artist, '') LIKE ?
+                OR COALESCE(lt.album, '') LIKE ?
+                OR COALESCE(lt.filename, '') LIKE ?
+                OR COALESCE(lt.file_path, '') LIKE ?
+                OR COALESCE(lt.genre, '') LIKE ?
+            )
+            """,
+            [like, like, like, like, like, like],
+        )
+
+    def get_library_track_count(self, search_text: str = "") -> int:
+        where_sql, params = self._build_library_search_clause(search_text)
+        row = self.conn.execute(
+            f"""
+            SELECT COUNT(*) AS total
+            FROM local_tracks lt
+            {where_sql}
+            """,
+            params,
+        ).fetchone()
+        return int(row["total"] or 0)
+
+    def search_library_tracks(self, search_text: str = "", limit: int = 200, offset: int = 0) -> List[sqlite3.Row]:
+        where_sql, params = self._build_library_search_clause(search_text)
+        params.extend([limit, offset])
+        return self.conn.execute(
+            f"""
+            SELECT lt.*
+            FROM local_tracks lt
+            {where_sql}
+            ORDER BY
+                CASE WHEN TRIM(COALESCE(lt.genre, '')) = '' THEN 0 ELSE 1 END,
+                COALESCE(lt.artist, ''),
+                COALESCE(lt.title, lt.filename),
+                lt.id
+            LIMIT ? OFFSET ?
+            """,
+            params,
+        ).fetchall()
+
+    def get_tracks_grouped_by_genre(self) -> List[sqlite3.Row]:
+        return self.conn.execute(
+            """
+            SELECT *
+            FROM local_tracks
+            ORDER BY
+                COALESCE(NULLIF(TRIM(genre), ''), 'Untagged'),
+                COALESCE(artist, ''),
+                COALESCE(title, filename),
+                id
+            """
+        ).fetchall()
+
+    def update_track_genre_state(
+        self,
+        track_id: int,
+        *,
+        genre: str,
+        metadata_genre: Optional[str],
+        db_genre: Optional[str],
+        sync_status: str,
+        route_playlist_name: Optional[str],
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE local_tracks
+            SET
+                genre = ?,
+                metadata_genre = ?,
+                db_genre = ?,
+                sync_status = ?,
+                route_playlist_name = ?,
+                last_tagged_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (genre, metadata_genre, db_genre, sync_status, route_playlist_name, track_id),
+        )
+        self.conn.commit()
 
     def _build_track_filter_clauses(
         self,
@@ -628,6 +770,18 @@ class Database:
         """
         params.append(limit)
         return self.conn.execute(query, params).fetchall()
+
+    def get_recent_tagged_tracks(self, limit: int = 100) -> List[sqlite3.Row]:
+        return self.conn.execute(
+            """
+            SELECT *
+            FROM local_tracks
+            WHERE last_tagged_at IS NOT NULL
+            ORDER BY last_tagged_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
 
     def get_unresolved_tracks(self, limit: int = 500) -> List[sqlite3.Row]:
         return self.conn.execute(

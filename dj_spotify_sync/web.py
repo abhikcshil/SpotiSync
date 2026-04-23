@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 from io import BytesIO
 
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, send_file, url_for
@@ -18,6 +19,13 @@ from .services import (
     run_reconcile,
     run_scan_workflow,
     run_sync,
+)
+from .tagging import (
+    apply_genre_tag,
+    get_all_songs_view,
+    get_by_genre_view,
+    get_quick_tagging_view_state,
+    get_track_payload,
 )
 
 
@@ -348,6 +356,88 @@ def library_page():
         )
     finally:
         db.close()
+
+
+@app.route("/quick-genre-tagging")
+def quick_genre_tagging_page():
+    track_id = request.args.get("track_id", type=int)
+    view_state = get_quick_tagging_view_state(track_id=track_id)
+    return render_template("quick_genre_tagging.html", view_state=view_state)
+
+
+@app.route("/api/quick-genre-tagging/untagged")
+def quick_genre_tagging_untagged_api():
+    queue_limit = request.args.get("limit", default=250, type=int)
+    view_state = get_quick_tagging_view_state(queue_limit=queue_limit)
+    return jsonify(
+        {
+            "queue": view_state["queue"]["untagged"],
+            "current_track": view_state["current_track"],
+            "presets": view_state["presets"],
+        }
+    )
+
+
+@app.route("/api/quick-genre-tagging/library")
+def quick_genre_tagging_library_api():
+    search_text = request.args.get("search", default="", type=str).strip()
+    limit = request.args.get("limit", default=200, type=int)
+    offset = request.args.get("offset", default=0, type=int)
+    return jsonify(get_all_songs_view(search_text=search_text, limit=limit, offset=offset))
+
+
+@app.route("/api/quick-genre-tagging/genres")
+def quick_genre_tagging_genres_api():
+    return jsonify(get_by_genre_view())
+
+
+@app.route("/api/quick-genre-tagging/tracks/<int:track_id>")
+def quick_genre_tagging_track_api(track_id: int):
+    track = get_track_payload(track_id)
+    if not track:
+        return jsonify({"error": "Track not found"}), 404
+    return jsonify(track)
+
+
+@app.route("/api/quick-genre-tagging/tracks/<int:track_id>/tag", methods=["POST"])
+def quick_genre_tagging_tag_api(track_id: int):
+    payload = request.get_json(silent=True) or {}
+    genre = str(payload.get("genre") or "").strip()
+    if not genre:
+        return jsonify({"error": "Genre is required."}), 400
+
+    try:
+        result = apply_genre_tag(track_id, genre)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    refreshed_state = get_quick_tagging_view_state(track_id=track_id)
+    status_code = 200 if result.outcome == "success" else 202 if result.outcome == "partial" else 422
+    return (
+        jsonify(
+            {
+                "outcome": result.outcome,
+                "message": result.message,
+                "track": result.track,
+                "queue": refreshed_state["queue"]["untagged"],
+            }
+        ),
+        status_code,
+    )
+
+
+@app.route("/api/quick-genre-tagging/audio/<int:track_id>")
+def quick_genre_tagging_audio_api(track_id: int):
+    track = get_track_payload(track_id)
+    if not track:
+        abort(404, description="Track not found")
+    file_path = track.get("file_path")
+    if not file_path:
+        abort(404, description="Track file is missing")
+    mimetype = mimetypes.guess_type(file_path)[0] or "audio/mpeg"
+    return send_file(file_path, mimetype=mimetype, conditional=True)
 
 
 @app.route("/unresolved")

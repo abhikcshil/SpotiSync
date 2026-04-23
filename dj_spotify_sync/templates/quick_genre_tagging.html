@@ -1,0 +1,847 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="quick-tagging-shell" id="quickGenreApp" data-state='{{ view_state|tojson }}'>
+  <div class="quick-tagging-hero">
+    <div>
+      <div class="eyebrow">Phase 2</div>
+      <h1>Quick Genre Tagging</h1>
+      <p class="hero-copy">Tag untagged songs fast, search the full library, and audit messy genres without leaving the same player-first workflow.</p>
+    </div>
+    <div class="shortcut-strip">
+      <span><kbd>Space</kbd> Play/Pause</span>
+      <span><kbd>&larr;</kbd>/<kbd>&rarr;</kbd> Seek</span>
+      <span><kbd>1-0</kbd> Tag genre</span>
+      <span><kbd>N</kbd> Next</span>
+      <span><kbd>P</kbd> Previous</span>
+    </div>
+  </div>
+
+  <div class="row g-4">
+    <div class="col-xl-8">
+      <section class="quick-panel">
+        <div class="quick-status-bar">
+          <span class="sync-pill" id="syncStatePill">Ready</span>
+          <label class="auto-next-toggle">
+            <input type="checkbox" id="autoNextToggle" checked>
+            <span>Auto-next after successful tag</span>
+          </label>
+        </div>
+
+        <div id="statusBanner" class="status-banner status-banner-neutral" aria-live="polite">
+          Choose a preset or press its number key to tag the current track.
+        </div>
+
+        <div class="track-card" id="trackCard">
+          <div class="track-meta-grid">
+            <div>
+              <div class="meta-label">Track</div>
+              <h2 id="trackTitle">No track loaded</h2>
+              <div class="track-subline" id="trackArtist">Select a song from the queue to begin.</div>
+              <div class="track-subline" id="trackAlbum"></div>
+            </div>
+            <div class="genre-summary">
+              <div class="meta-label">Current genre</div>
+              <div class="genre-value" id="currentGenre">Untagged</div>
+              <div class="meta-note" id="routePlaylist">Route: Unsorted</div>
+            </div>
+          </div>
+
+          <div class="file-hint">
+            <div class="meta-label">Local file</div>
+            <div id="pathHint">No file selected.</div>
+          </div>
+
+          <div class="player-card">
+            <audio id="audioPlayer" preload="metadata"></audio>
+            <div class="player-controls">
+              <button class="btn btn-outline-light" id="prevButton" type="button">Prev</button>
+              <button class="btn btn-light" id="backButton" type="button">-5s</button>
+              <button class="btn btn-warning" id="playPauseButton" type="button">Play</button>
+              <button class="btn btn-light" id="forwardButton" type="button">+5s</button>
+              <button class="btn btn-outline-light" id="nextButton" type="button">Next</button>
+            </div>
+            <div class="progress-wrap">
+              <span id="currentTimeLabel">0:00</span>
+              <input id="progressBar" type="range" min="0" max="100" value="0" step="0.1">
+              <span id="durationLabel">0:00</span>
+            </div>
+          </div>
+
+          <div class="genre-chip-grid" id="genreChipGrid"></div>
+        </div>
+      </section>
+    </div>
+
+    <div class="col-xl-4">
+      <aside class="queue-panel">
+        <div class="queue-tabs" role="tablist" aria-label="Queue tabs">
+          <button type="button" class="queue-tab active" data-tab="untagged">Untagged</button>
+          <button type="button" class="queue-tab" data-tab="all">All Songs</button>
+          <button type="button" class="queue-tab" data-tab="genre">By Genre</button>
+        </div>
+        <div id="queueTools" class="queue-tools"></div>
+        <div class="queue-summary" id="queueSummary"></div>
+        <div class="queue-list" id="queueList" aria-live="polite"></div>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const root = document.getElementById("quickGenreApp");
+  const seed = JSON.parse(root.dataset.state);
+  const shortcutKeys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+  const seekAmount = 5;
+  const libraryPageSize = 200;
+  const state = {
+    presets: seed.presets || [],
+    queues: {
+      untagged: seed.queue?.untagged || [],
+      all: [],
+      genre: [],
+    },
+    allSongs: {
+      items: [],
+      search: "",
+      limit: libraryPageSize,
+      offset: 0,
+      total: 0,
+      hasMore: false,
+      loaded: false,
+      loading: false,
+    },
+    byGenre: {
+      groups: [],
+      loaded: false,
+      loading: false,
+      expanded: new Set(),
+    },
+    currentTab: "untagged",
+    currentTrack: seed.current_track || null,
+    autoNext: true,
+    selectedGenre: seed.current_track?.genre || null,
+    history: [],
+    isTagging: false,
+    currentAudioTrackId: null,
+    bannerKind: "neutral",
+    bannerMessage: "Choose a preset or press its number key to tag the current track.",
+  };
+
+  const els = {
+    audio: document.getElementById("audioPlayer"),
+    playPause: document.getElementById("playPauseButton"),
+    back: document.getElementById("backButton"),
+    forward: document.getElementById("forwardButton"),
+    prev: document.getElementById("prevButton"),
+    next: document.getElementById("nextButton"),
+    progress: document.getElementById("progressBar"),
+    currentTime: document.getElementById("currentTimeLabel"),
+    duration: document.getElementById("durationLabel"),
+    statusBanner: document.getElementById("statusBanner"),
+    syncStatePill: document.getElementById("syncStatePill"),
+    autoNext: document.getElementById("autoNextToggle"),
+    title: document.getElementById("trackTitle"),
+    artist: document.getElementById("trackArtist"),
+    album: document.getElementById("trackAlbum"),
+    genre: document.getElementById("currentGenre"),
+    routePlaylist: document.getElementById("routePlaylist"),
+    pathHint: document.getElementById("pathHint"),
+    chipGrid: document.getElementById("genreChipGrid"),
+    queueSummary: document.getElementById("queueSummary"),
+    queueList: document.getElementById("queueList"),
+    queueTools: document.getElementById("queueTools"),
+    tabs: Array.from(document.querySelectorAll(".queue-tab")),
+  };
+
+  function formatTime(totalSeconds) {
+    if (!Number.isFinite(totalSeconds) || totalSeconds < 0) {
+      return "0:00";
+    }
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = Math.floor(totalSeconds % 60);
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function setBanner(kind, message) {
+    state.bannerKind = kind;
+    state.bannerMessage = message;
+    els.statusBanner.className = `status-banner status-banner-${kind}`;
+    els.statusBanner.textContent = message;
+  }
+
+  function setSyncPill(syncStatus) {
+    const labels = {
+      synced: "Synced",
+      metadata_write_failed: "Metadata write failed",
+      db_sync_pending: "DB sync pending",
+      untagged: "Untagged",
+    };
+    const tone = {
+      synced: "success",
+      metadata_write_failed: "danger",
+      db_sync_pending: "warning",
+      untagged: "neutral",
+    };
+    const key = syncStatus || "untagged";
+    els.syncStatePill.className = `sync-pill sync-pill-${tone[key] || "neutral"}`;
+    els.syncStatePill.textContent = labels[key] || key;
+  }
+
+  function getTabItems(tabName) {
+    if (tabName === "untagged") {
+      return state.queues.untagged;
+    }
+    if (tabName === "all") {
+      return state.allSongs.items;
+    }
+    if (tabName === "genre") {
+      return state.byGenre.groups.flatMap((group) => group.tracks);
+    }
+    return [];
+  }
+
+  function renderChips() {
+    els.chipGrid.innerHTML = "";
+    state.presets.forEach((genre, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "genre-chip";
+      if (state.selectedGenre === genre) {
+        button.classList.add("active");
+      }
+      button.dataset.genre = genre;
+      button.innerHTML = `<span>${genre}</span><span class="chip-shortcut">${shortcutKeys[index]}</span>`;
+      button.addEventListener("click", () => tagCurrentTrack(genre));
+      els.chipGrid.appendChild(button);
+    });
+  }
+
+  function queueItemMarkup(track, indexLabel = "", showMeta = false) {
+    const genreLine = showMeta ? `<span class="queue-meta-row">Genre: ${escapeHtml(track.genre || "Untagged")} · ${escapeHtml(track.sync_status || "untagged")}</span>` : "";
+    return `
+      <span class="queue-index">${escapeHtml(indexLabel)}</span>
+      <span class="queue-copy">
+        <strong>${escapeHtml(track.title || track.filename || "Unknown title")}</strong>
+        <span>${escapeHtml(track.artist || "Unknown artist")}${track.album ? ` · ${escapeHtml(track.album)}` : ""}</span>
+        ${genreLine}
+        <span class="queue-path">${escapeHtml(track.path_hint || track.file_path || "")}</span>
+      </span>
+    `;
+  }
+
+  function bindQueueTrackButton(button, trackId, pushHistory = true) {
+    button.addEventListener("click", () => loadTrack(trackId, pushHistory));
+  }
+
+  function renderUntaggedQueue() {
+    els.queueSummary.textContent = `${state.queues.untagged.length} untagged song${state.queues.untagged.length === 1 ? "" : "s"} remaining`;
+    els.queueList.innerHTML = "";
+    if (!state.queues.untagged.length) {
+      const empty = document.createElement("div");
+      empty.className = "queue-empty";
+      empty.textContent = "No untagged songs left in the queue.";
+      els.queueList.appendChild(empty);
+      return;
+    }
+
+    state.queues.untagged.forEach((track, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "queue-item";
+      if (state.currentTrack && track.id === state.currentTrack.id) {
+        button.classList.add("active");
+      }
+      button.innerHTML = queueItemMarkup(track, shortcutKeys[index] || "");
+      bindQueueTrackButton(button, track.id, true);
+      els.queueList.appendChild(button);
+    });
+  }
+
+  function renderAllSongsTools() {
+    els.queueTools.innerHTML = `
+      <div class="search-panel">
+        <label class="meta-label" for="allSongsSearch">Library search</label>
+        <div class="search-input-row">
+          <input id="allSongsSearch" class="form-control form-control-sm" type="search" placeholder="Search title, artist, album, path, or genre" value="${escapeHtml(state.allSongs.search)}">
+          <button id="allSongsSearchButton" class="btn btn-warning btn-sm" type="button">Search</button>
+        </div>
+      </div>
+    `;
+    const searchInput = document.getElementById("allSongsSearch");
+    const runSearch = () => {
+      loadAllSongs({ search: searchInput.value.trim(), offset: 0, append: false });
+    };
+    searchInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        runSearch();
+      }
+    });
+    document.getElementById("allSongsSearchButton").addEventListener("click", runSearch);
+  }
+
+  function renderAllSongsQueue() {
+    renderAllSongsTools();
+    const total = state.allSongs.total;
+    const visible = state.allSongs.items.length;
+    const searchText = state.allSongs.search;
+    els.queueSummary.textContent = searchText
+      ? `${total} result${total === 1 ? "" : "s"} for "${searchText}"`
+      : `${visible} of ${total} songs loaded`;
+    els.queueList.innerHTML = "";
+
+    if (!state.allSongs.items.length) {
+      const empty = document.createElement("div");
+      empty.className = "queue-empty";
+      empty.textContent = searchText ? "No songs matched that search." : "No songs found in the library.";
+      els.queueList.appendChild(empty);
+      return;
+    }
+
+    state.allSongs.items.forEach((track) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "queue-item";
+      if (state.currentTrack && track.id === state.currentTrack.id) {
+        button.classList.add("active");
+      }
+      button.innerHTML = queueItemMarkup(track, "", true);
+      bindQueueTrackButton(button, track.id, true);
+      els.queueList.appendChild(button);
+    });
+
+    if (state.allSongs.hasMore) {
+      const loadMore = document.createElement("button");
+      loadMore.type = "button";
+      loadMore.className = "btn btn-outline-light btn-sm queue-load-more";
+      loadMore.textContent = state.allSongs.loading ? "Loading..." : "Load more";
+      loadMore.disabled = state.allSongs.loading;
+      loadMore.addEventListener("click", () => {
+        loadAllSongs({
+          search: state.allSongs.search,
+          offset: state.allSongs.items.length,
+          append: true,
+        });
+      });
+      els.queueList.appendChild(loadMore);
+    }
+  }
+
+  function renderGenreTools() {
+    els.queueTools.innerHTML = `
+      <div class="genre-toolbar">
+        <button class="btn btn-outline-light btn-sm" id="expandGenresButton" type="button">Expand all</button>
+        <button class="btn btn-outline-light btn-sm" id="collapseGenresButton" type="button">Collapse all</button>
+      </div>
+    `;
+    document.getElementById("expandGenresButton").addEventListener("click", () => {
+      state.byGenre.expanded = new Set(state.byGenre.groups.map((group) => group.genre));
+      renderQueue();
+    });
+    document.getElementById("collapseGenresButton").addEventListener("click", () => {
+      state.byGenre.expanded = new Set();
+      renderQueue();
+    });
+  }
+
+  function renderGenreQueue() {
+    renderGenreTools();
+    els.queueSummary.textContent = `${state.byGenre.trackCount || 0} songs across ${state.byGenre.groupCount || 0} genres`;
+    els.queueList.innerHTML = "";
+
+    if (!state.byGenre.groups.length) {
+      const empty = document.createElement("div");
+      empty.className = "queue-empty";
+      empty.textContent = "No genres available yet.";
+      els.queueList.appendChild(empty);
+      return;
+    }
+
+    state.byGenre.groups.forEach((group) => {
+      const section = document.createElement("section");
+      section.className = "genre-group";
+
+      const header = document.createElement("button");
+      header.type = "button";
+      header.className = "genre-group-header";
+      const expanded = state.byGenre.expanded.has(group.genre);
+      header.setAttribute("aria-expanded", expanded ? "true" : "false");
+      header.innerHTML = `
+        <span>
+          <strong>${escapeHtml(group.genre)}</strong>
+          <span class="genre-group-count">${group.count} song${group.count === 1 ? "" : "s"}</span>
+        </span>
+        <span>${expanded ? "Hide" : "Show"}</span>
+      `;
+      header.addEventListener("click", () => {
+        if (expanded) {
+          state.byGenre.expanded.delete(group.genre);
+        } else {
+          state.byGenre.expanded.add(group.genre);
+        }
+        renderQueue();
+      });
+      section.appendChild(header);
+
+      if (expanded) {
+        const list = document.createElement("div");
+        list.className = "genre-group-list";
+        group.tracks.forEach((track) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "queue-item queue-item-compact";
+          if (state.currentTrack && track.id === state.currentTrack.id) {
+            button.classList.add("active");
+          }
+          button.innerHTML = queueItemMarkup(track, "", true);
+          bindQueueTrackButton(button, track.id, true);
+          list.appendChild(button);
+        });
+        section.appendChild(list);
+      }
+
+      els.queueList.appendChild(section);
+    });
+  }
+
+  function renderQueueTools() {
+    if (state.currentTab === "all") {
+      renderAllSongsTools();
+      return;
+    }
+    if (state.currentTab === "genre") {
+      renderGenreTools();
+      return;
+    }
+    els.queueTools.innerHTML = "";
+  }
+
+  function renderQueue() {
+    els.tabs.forEach((tab) => {
+      tab.classList.toggle("active", tab.dataset.tab === state.currentTab);
+    });
+    renderQueueTools();
+    if (state.currentTab === "all") {
+      renderAllSongsQueue();
+      return;
+    }
+    if (state.currentTab === "genre") {
+      renderGenreQueue();
+      return;
+    }
+    renderUntaggedQueue();
+  }
+
+  function updateAudioSource() {
+    const track = state.currentTrack;
+    if (!track || !track.id) {
+      els.audio.removeAttribute("src");
+      els.audio.load();
+      state.currentAudioTrackId = null;
+      return;
+    }
+    if (state.currentAudioTrackId === track.id) {
+      return;
+    }
+    els.audio.src = `/api/quick-genre-tagging/audio/${track.id}`;
+    els.audio.load();
+    state.currentAudioTrackId = track.id;
+  }
+
+  function renderCurrentTrack() {
+    const track = state.currentTrack;
+    if (!track) {
+      els.title.textContent = "No track loaded";
+      els.artist.textContent = "Select a song from the queue to begin.";
+      els.album.textContent = "";
+      els.genre.textContent = "Untagged";
+      els.routePlaylist.textContent = "Route: Unsorted";
+      els.pathHint.textContent = "No file selected.";
+      setSyncPill("untagged");
+      updateAudioSource();
+      renderChips();
+      renderQueue();
+      return;
+    }
+
+    els.title.textContent = track.title || track.filename || "Unknown title";
+    els.artist.textContent = track.artist || "Unknown artist";
+    els.album.textContent = track.album ? `Album: ${track.album}` : "Album unavailable";
+    els.genre.textContent = track.genre || "Untagged";
+    els.routePlaylist.textContent = `Route: ${track.route_playlist_name || "Unsorted"}`;
+    els.pathHint.textContent = track.path_hint || track.file_path || "Missing file path";
+    setSyncPill(track.sync_status);
+    updateAudioSource();
+    renderChips();
+    renderQueue();
+  }
+
+  function syncTrackAcrossViews(updatedTrack) {
+    const replaceTrack = (items) => items.map((item) => item.id === updatedTrack.id ? updatedTrack : item);
+    state.queues.untagged = state.queues.untagged.filter((item) => item.id !== updatedTrack.id);
+    state.allSongs.items = replaceTrack(state.allSongs.items);
+    state.byGenre.groups = state.byGenre.groups
+      .map((group) => ({
+        ...group,
+        tracks: group.tracks.filter((item) => item.id !== updatedTrack.id),
+      }))
+      .filter((group) => group.tracks.length > 0);
+
+    const targetGenre = updatedTrack.genre || "Untagged";
+    const existingGroup = state.byGenre.groups.find((group) => group.genre === targetGenre);
+    if (existingGroup) {
+      existingGroup.tracks.push(updatedTrack);
+      existingGroup.tracks.sort((a, b) => `${a.artist || ""}${a.title || a.filename || ""}`.localeCompare(`${b.artist || ""}${b.title || b.filename || ""}`));
+    } else if (state.byGenre.loaded) {
+      state.byGenre.groups.push({ genre: targetGenre, count: 0, tracks: [updatedTrack] });
+      state.byGenre.groups.sort((a, b) => a.genre.localeCompare(b.genre));
+    }
+    state.byGenre.groups = state.byGenre.groups.map((group) => ({ ...group, count: group.tracks.length }));
+    state.byGenre.groupCount = state.byGenre.groups.length;
+    state.byGenre.trackCount = state.byGenre.groups.reduce((sum, group) => sum + group.tracks.length, 0);
+  }
+
+  async function refreshUntaggedQueue() {
+    const response = await fetch("/api/quick-genre-tagging/untagged");
+    if (!response.ok) {
+      throw new Error("Could not refresh the untagged queue.");
+    }
+    const payload = await response.json();
+    state.queues.untagged = payload.queue || [];
+    if (state.currentTab === "untagged") {
+      renderQueue();
+    }
+  }
+
+  async function loadAllSongs({ search = "", offset = 0, append = false } = {}) {
+    if (state.allSongs.loading) {
+      return;
+    }
+    state.allSongs.loading = true;
+    renderQueue();
+    try {
+      const params = new URLSearchParams({
+        search,
+        limit: String(state.allSongs.limit),
+        offset: String(offset),
+      });
+      const response = await fetch(`/api/quick-genre-tagging/library?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error("Could not load library songs.");
+      }
+      const payload = await response.json();
+      state.allSongs.search = payload.search || "";
+      state.allSongs.offset = payload.offset || 0;
+      state.allSongs.total = payload.total || 0;
+      state.allSongs.hasMore = Boolean(payload.has_more);
+      state.allSongs.items = append ? state.allSongs.items.concat(payload.items || []) : (payload.items || []);
+      state.allSongs.loaded = true;
+      state.queues.all = state.allSongs.items;
+    } catch (error) {
+      setBanner("danger", error.message || "Could not load the full library.");
+    } finally {
+      state.allSongs.loading = false;
+      if (state.currentTab === "all") {
+        renderQueue();
+      }
+    }
+  }
+
+  async function loadByGenre(force = false) {
+    if (state.byGenre.loading || (state.byGenre.loaded && !force)) {
+      return;
+    }
+    state.byGenre.loading = true;
+    renderQueue();
+    try {
+      const response = await fetch("/api/quick-genre-tagging/genres");
+      if (!response.ok) {
+        throw new Error("Could not load songs by genre.");
+      }
+      const payload = await response.json();
+      state.byGenre.groups = payload.groups || [];
+      state.byGenre.groupCount = payload.group_count || 0;
+      state.byGenre.trackCount = payload.track_count || 0;
+      if (!state.byGenre.expanded.size && state.byGenre.groups.length) {
+        state.byGenre.expanded.add(state.byGenre.groups[0].genre);
+      }
+      state.byGenre.loaded = true;
+    } catch (error) {
+      setBanner("danger", error.message || "Could not load genre groups.");
+    } finally {
+      state.byGenre.loading = false;
+      if (state.currentTab === "genre") {
+        renderQueue();
+      }
+    }
+  }
+
+  async function switchTab(tabName) {
+    state.currentTab = tabName;
+    renderQueue();
+    if (tabName === "all" && !state.allSongs.loaded) {
+      await loadAllSongs({ search: state.allSongs.search, offset: 0, append: false });
+    } else if (tabName === "genre" && !state.byGenre.loaded) {
+      await loadByGenre(false);
+    }
+  }
+
+  function getQueueIndex(trackId) {
+    const items = getTabItems(state.currentTab);
+    return items.findIndex((item) => item.id === trackId);
+  }
+
+  function getNextQueueId() {
+    const items = getTabItems(state.currentTab);
+    if (!items.length) {
+      return null;
+    }
+    if (!state.currentTrack) {
+      return items[0].id;
+    }
+    const index = getQueueIndex(state.currentTrack.id);
+    if (index === -1) {
+      return items[0].id;
+    }
+    return items[index + 1]?.id || items[index - 1]?.id || null;
+  }
+
+  async function loadTrack(trackId, pushHistory = false) {
+    if (!trackId) {
+      return;
+    }
+    if (pushHistory && state.currentTrack && state.currentTrack.id !== trackId) {
+      state.history.push(state.currentTrack.id);
+    }
+
+    const knownTrack =
+      state.queues.untagged.find((item) => item.id === trackId) ||
+      state.allSongs.items.find((item) => item.id === trackId) ||
+      state.byGenre.groups.flatMap((group) => group.tracks).find((item) => item.id === trackId);
+
+    if (knownTrack) {
+      state.currentTrack = knownTrack;
+      state.selectedGenre = knownTrack.genre || null;
+      renderCurrentTrack();
+      return;
+    }
+
+    const response = await fetch(`/api/quick-genre-tagging/tracks/${trackId}`);
+    if (!response.ok) {
+      setBanner("danger", "Could not load that track.");
+      return;
+    }
+    state.currentTrack = await response.json();
+    state.selectedGenre = state.currentTrack.genre || null;
+    renderCurrentTrack();
+  }
+
+  async function tagCurrentTrack(genre) {
+    if (!state.currentTrack || state.isTagging) {
+      return;
+    }
+    const nextQueueId = getNextQueueId();
+    state.isTagging = true;
+
+    try {
+      const response = await fetch(`/api/quick-genre-tagging/tracks/${state.currentTrack.id}/tag`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ genre }),
+      });
+      const payload = await response.json();
+      if (!response.ok && !payload.track) {
+        throw new Error(payload.error || "Tagging failed.");
+      }
+
+      state.currentTrack = payload.track || state.currentTrack;
+      state.selectedGenre = payload.outcome === "error" ? state.selectedGenre : (payload.track?.genre || genre);
+      state.queues.untagged = payload.queue || state.queues.untagged;
+
+      if (payload.track && payload.outcome !== "error") {
+        syncTrackAcrossViews(payload.track);
+      }
+
+      if (payload.outcome === "success") {
+        setBanner("success", payload.message);
+        if (state.allSongs.loaded) {
+          await loadAllSongs({ search: state.allSongs.search, offset: 0, append: false });
+        }
+        if (state.currentTab === "genre") {
+          await loadByGenre(true);
+        }
+        if (state.autoNext && nextQueueId) {
+          renderCurrentTrack();
+          await loadTrack(nextQueueId, false);
+          return;
+        }
+      } else if (payload.outcome === "partial") {
+        setBanner("warning", payload.message);
+        if (state.allSongs.loaded) {
+          await loadAllSongs({ search: state.allSongs.search, offset: 0, append: false });
+        }
+        if (state.currentTab === "genre") {
+          await loadByGenre(true);
+        }
+      } else {
+        setBanner("danger", payload.message || "Metadata write failed.");
+      }
+
+      renderCurrentTrack();
+    } catch (error) {
+      setBanner("danger", error.message || "Tagging failed.");
+    } finally {
+      state.isTagging = false;
+    }
+  }
+
+  function togglePlayPause() {
+    if (!state.currentTrack) {
+      return;
+    }
+    if (els.audio.paused) {
+      els.audio.play().catch(() => setBanner("danger", "Playback could not start for this file."));
+    } else {
+      els.audio.pause();
+    }
+  }
+
+  function seekBy(delta) {
+    if (!Number.isFinite(els.audio.duration)) {
+      return;
+    }
+    const nextTime = Math.min(Math.max(els.audio.currentTime + delta, 0), els.audio.duration);
+    els.audio.currentTime = nextTime;
+  }
+
+  async function loadPreviousTrack() {
+    while (state.history.length) {
+      const trackId = state.history.pop();
+      if (trackId && trackId !== state.currentTrack?.id) {
+        await loadTrack(trackId, false);
+        return;
+      }
+    }
+  }
+
+  async function loadNextTrack() {
+    const nextId = getNextQueueId();
+    if (nextId) {
+      await loadTrack(nextId, true);
+    }
+  }
+
+  function bindEvents() {
+    els.autoNext.addEventListener("change", () => {
+      state.autoNext = els.autoNext.checked;
+    });
+
+    els.playPause.addEventListener("click", togglePlayPause);
+    els.back.addEventListener("click", () => seekBy(-seekAmount));
+    els.forward.addEventListener("click", () => seekBy(seekAmount));
+    els.prev.addEventListener("click", () => loadPreviousTrack());
+    els.next.addEventListener("click", () => loadNextTrack());
+
+    els.audio.addEventListener("loadedmetadata", () => {
+      els.duration.textContent = formatTime(els.audio.duration);
+      els.currentTime.textContent = formatTime(els.audio.currentTime);
+      els.progress.value = "0";
+      els.playPause.textContent = "Play";
+    });
+
+    els.audio.addEventListener("timeupdate", () => {
+      els.currentTime.textContent = formatTime(els.audio.currentTime);
+      if (Number.isFinite(els.audio.duration) && els.audio.duration > 0) {
+        els.progress.value = ((els.audio.currentTime / els.audio.duration) * 100).toString();
+      }
+    });
+
+    els.audio.addEventListener("pause", () => {
+      els.playPause.textContent = "Play";
+    });
+
+    els.audio.addEventListener("play", () => {
+      els.playPause.textContent = "Pause";
+    });
+
+    els.audio.addEventListener("ended", () => {
+      if (state.autoNext) {
+        loadNextTrack();
+      }
+    });
+
+    els.progress.addEventListener("input", () => {
+      if (!Number.isFinite(els.audio.duration) || els.audio.duration <= 0) {
+        return;
+      }
+      els.audio.currentTime = (Number(els.progress.value) / 100) * els.audio.duration;
+    });
+
+    els.tabs.forEach((tab) => {
+      tab.addEventListener("click", () => switchTab(tab.dataset.tab));
+    });
+
+    // Ignore shortcuts while typing so keyboard tagging does not fight search inputs or other controls.
+    document.addEventListener("keydown", (event) => {
+      const target = event.target;
+      const isTyping = target instanceof HTMLElement && (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT" ||
+        target.isContentEditable
+      );
+      if (isTyping) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      if (event.code === "Space") {
+        event.preventDefault();
+        togglePlayPause();
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        seekBy(-seekAmount);
+        return;
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        seekBy(seekAmount);
+        return;
+      }
+      if (key === "n") {
+        event.preventDefault();
+        loadNextTrack();
+        return;
+      }
+      if (key === "p") {
+        event.preventDefault();
+        loadPreviousTrack();
+        return;
+      }
+
+      const presetIndex = shortcutKeys.indexOf(event.key);
+      if (presetIndex >= 0 && state.presets[presetIndex]) {
+        event.preventDefault();
+        tagCurrentTrack(state.presets[presetIndex]);
+      }
+    });
+  }
+
+  bindEvents();
+  renderCurrentTrack();
+  refreshUntaggedQueue().catch(() => {});
+})();
+</script>
+{% endblock %}

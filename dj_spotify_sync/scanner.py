@@ -51,6 +51,19 @@ class GenreRouter:
                 return playlist
         return self.unsorted_playlist
 
+    def route_from_row(self, track: Dict) -> str:
+        file_path = Path(str(track.get("file_path") or ""))
+        return self.route(
+            {
+                "title": track.get("title"),
+                "artist": track.get("artist"),
+                "album": track.get("album"),
+                "genre": track.get("genre"),
+                "filename": track.get("filename") or file_path.name,
+                "folder_name": file_path.parent.name.strip().lower() if file_path.parent.name else "",
+            }
+        )
+
 
 class MusicScanner:
     def __init__(self, router: GenreRouter) -> None:
